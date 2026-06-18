@@ -1,7 +1,8 @@
-# Errand — Session Handoff (2026-06-17)
+# Errand — Session Handoff (2026-06-18)
 
 > Read this first to resume. The full living spec + changelog is in **`PLAN.md`** (same
 > folder) — this file is the short "where we are + what's next" so you can start fast.
+> **Newest work is in "Latest session" right below.** All on GitHub `AbhiPoluri/errand` (main, ~9 commits).
 
 ## What Errand is
 A from-scratch TypeScript AI agent harness with a calm consumer UI for **non-technical
@@ -32,8 +33,31 @@ editorial UI revamp** (paper/ink/clay/terracotta palette, `stone` neutrals, grai
 shadows; no header logo; flat working dot) → **memory + dreaming** (see below) →
 **embedding-based memory retrieval** → **restart-hardening** (orphan reconciliation) →
 **v6 document reading — PDF/docx/xlsx/csv + image OCR** → **v7 capability-pack architecture** →
-**file attach + model switcher** → **streaming replies, copy button, delete-conversations, multi-file attach, git repo**
-(all 2026-06-17; see DONE sections + PLAN §11).
+**file attach + model switcher** → **streaming replies, copy button, delete-conversations, multi-file attach, git repo** →
+**endpoint switcher (run on local Ollama or OpenRouter)** → **memory relevance-floor fix** → **browser act→observe**
+(all 2026-06-17/18; see "Latest session" below + PLAN §11).
+
+## Latest session (2026-06-18) — newest 3, plus the experience wave
+1. **Endpoint switcher.** Settings → Model now also picks the **endpoint**: OpenRouter (cloud, streamed) or
+   **Ollama (local, `http://localhost:11434/v1`, NON-streamed)**. Why non-streamed for local: small models emit
+   tool calls as plain *text* when streamed but proper `tool_calls` when not. `client.makeClient(baseURL,apiKey)`;
+   `runRegistry.currentEndpoint()/currentClient()` build a per-run client (OpenRouter singleton stays for
+   embeddings/dreaming); `src/models.ts` `ENDPOINTS`; loop branches on `RunnerOpts.stream`. `/api/model` GET/POST
+   carries `endpoint`. **Verified llama3.2:3b drove a tool task end-to-end.** ⚠️ The user's `errand.db` is currently
+   set to **Ollama / llama3.2:3b** (from testing) — switch back via Settings → Model → OpenRouter if normal use feels off.
+2. **Memory relevance-floor fix.** `rankMemories` (`store.ts`) used to inject ALL memories when ≤10 (no vector
+   filter at all), so an off-topic memory ("Portland hotel deals") bled into an unrelated task and derailed the small
+   model. Now cosine retrieval runs for EVERY set size + a `RELEVANCE_FLOOR=0.3` — an unrelated query injects nothing.
+   (We *had* embedding retrieval since earlier this session; this removed the small-set shortcut that bypassed it.)
+3. **Browser act→observe.** `browser_click` streamed a screenshot to the UI but returned "Done." to the *model* with
+   no page state → it never saw misclicks and assumed success. Now every browser action returns the resulting page
+   (title/text/clickable elements, size-budgeted ≤~6KB) to the model; click/type descriptions + the system prompt
+   (`prompt.ts`) tell it to verify and re-read/retry. When the post-action page can't be read, tools refuse to report
+   clean success — a risky click → `outcome:"uncertain"` (don't blindly re-submit). (`src/tools/browser.ts` observe()/unverified().)
+   Open follow-up: the observation has no page URL (extension `read` at `extension/background.js` returns title/text/elements
+   only — adding `location.href` needs an extension tweak + reload); title+content is usually enough to verify.
+- Earlier this session: streaming replies, copy button, delete-conversations (single+multi-select), multi-file attach
+  (Home + Run View), git repo + private GitHub. All committed + pushed.
 
 ## Memory + Dreaming (the area of active work)
 - **Store** (`src/server/store.ts`): `memories` (now with an `embedding` TEXT column),
