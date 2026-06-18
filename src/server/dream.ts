@@ -39,7 +39,7 @@ export async function dream(): Promise<{ added: number; merged: number; removed:
     "(1) Extract only HIGH-SIGNAL, durable facts/preferences/habits worth remembering long-term — never transient details of a single task. " +
     "(2) DE-DUPLICATE thoroughly: cluster ALL memories that express the same fact into one duplicateGroups entry — list every one of their ids together with a single merged 'text' that replaces the whole cluster. Each distinct fact must end up represented exactly once. Never put memories about DIFFERENT things in the same group, and never leave two memories that say the same thing ungrouped. " +
     "(3) Suggest at most 3 of the BEST gentle, concrete proactive ideas grounded in real patterns — quality over quantity, fewer is better. " +
-    "Plain language, no jargon.";
+    "Plain language, no jargon. Write every memory and every suggestion in English, regardless of the model being used.";
   const memBlock = memList.length
     ? memList.map((m) => `[${m.id}] ${m.text}`).join("\n")
     : "(none)";
