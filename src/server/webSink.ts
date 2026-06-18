@@ -94,5 +94,9 @@ export class WebSink implements EventSink {
     this.buffer = events.slice();
     this.recentDeltas = [];
     this.maxSeq = events.length ? events[events.length - 1].seq : -1;
+    // A reopened FINISHED run is rehydrated via preload (not live emit), so mark it done if its
+    // persisted stream already ended terminally — otherwise onDone would park forever (no further
+    // terminal event is coming) and the SSE route would never tear down after replay.
+    this.done = events.some((e) => e.type === "run.finished" || e.type === "run.error");
   }
 }

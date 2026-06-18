@@ -115,7 +115,7 @@ export const bash: Tool<Args> = {
         resolve({
           ok: code === 0,
           data: { code, stdout: out, stderr: err }, // already capped on append
-          bytes: out.length + err.length, // accurate now: each accumulator is <= OUTPUT_CAP
+          bytes: Buffer.byteLength(out) + Buffer.byteLength(err), // true UTF-8 bytes (each accumulator <= OUTPUT_CAP)
           error: code === 0 ? undefined : `exit_${code}`,
         });
       });

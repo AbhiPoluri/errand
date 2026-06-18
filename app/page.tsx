@@ -69,6 +69,7 @@ export default function Page() {
   const [deleting, setDeleting] = useState(false);
   const [recentQuery, setRecentQuery] = useState("");
   const [welcomeDismissed, setWelcomeDismissed] = useState(true); // default true to avoid an SSR flash; flipped in an effect
+  const [homeLoaded, setHomeLoaded] = useState(false); // true once recent+suggestions have been fetched at least once
 
   // Show the first-run welcome only if it hasn't been dismissed before (persisted in localStorage).
   useEffect(() => {
@@ -214,14 +215,16 @@ export default function Page() {
     if (!idle) return;
     setSelectMode(false);
     setSelected(new Set());
-    fetch("/api/runs")
-      .then((r) => r.json())
-      .then((d) => setRecent(d.runs ?? []))
-      .catch(() => {});
-    fetch("/api/memory")
-      .then((r) => r.json())
-      .then((d) => setSuggestions(d.suggestions ?? []))
-      .catch(() => {});
+    // Mark home loaded only after BOTH lists have been fetched, so the first-run welcome card never
+    // flashes for a returning user in the window before their history paints.
+    Promise.allSettled([
+      fetch("/api/runs")
+        .then((r) => r.json())
+        .then((d) => setRecent(d.runs ?? [])),
+      fetch("/api/memory")
+        .then((r) => r.json())
+        .then((d) => setSuggestions(d.suggestions ?? [])),
+    ]).finally(() => setHomeLoaded(true));
   }, [idle, memoryOpen]);
 
   const dismissSuggestion = async (id: string) => {
@@ -404,8 +407,9 @@ export default function Page() {
           ))}
         </motion.div>
 
-        {/* First-run welcome — only on a truly bare Home (no past runs, no ideas yet) */}
-        {!welcomeDismissed && recent.length === 0 && suggestions.length === 0 && (
+        {/* First-run welcome — only on a truly bare Home (no past runs, no ideas yet), and only
+            after the lists have loaded so it can't flash for a returning user */}
+        {!welcomeDismissed && homeLoaded && recent.length === 0 && suggestions.length === 0 && (
           <motion.div
             variants={item}
             className="lift mt-4 flex items-start justify-between gap-3 rounded-2xl border border-stone-200/80 bg-white p-5"

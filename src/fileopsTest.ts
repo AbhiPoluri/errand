@@ -236,6 +236,17 @@ async function testRecentChanges() {
   const todayFiles = today.data?.files ?? [];
   check("'today' window drops the 30-day-old file", !todayFiles.some((f) => f.path.endsWith("old.txt")));
   check("'today' window keeps the new file", todayFiles.some((f) => f.path.endsWith("new.txt")));
+
+  const prevMax = process.env.ERRAND_MAX_NODES;
+  process.env.ERRAND_MAX_NODES = "1";
+  try {
+    const trunc = await recentChanges.run({}, ctxFor(root, new Journal()));
+    check("recent_changes flags truncated", trunc.data?.truncated === true);
+    check("truncated recent_changes admits the partial scan", /didn't reach|too big/.test(recentChanges.summarize(trunc)), recentChanges.summarize(trunc));
+  } finally {
+    if (prevMax === undefined) delete process.env.ERRAND_MAX_NODES;
+    else process.env.ERRAND_MAX_NODES = prevMax;
+  }
   rmSync(root, { recursive: true, force: true });
 }
 

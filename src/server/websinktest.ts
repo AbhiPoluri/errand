@@ -43,6 +43,18 @@ async function main() {
   sink2.preload([ev(0, { type: "run.started", title: "x" }), ev(1, { type: "message.completed", text: "done" })]);
   check("preload sets buffer + maxSeq", sink2.events().length === 2 && sink2.lastSeq() === 1);
 
+  console.log("\n== reopened FINISHED run: preload marks done so onDone fires ==");
+  const sink4 = new WebSink();
+  sink4.preload([ev(0, { type: "run.started", title: "x" }), ev(1, { type: "run.finished", status: "completed", finalMessage: "", changes: [] })]);
+  check("preload of a terminal stream sets done", sink4.done === true);
+  let reopenedFired = false;
+  sink4.onDone(() => (reopenedFired = true));
+  await new Promise((r) => setTimeout(r, 0));
+  check("onDone fires (microtask) on a reopened finished run", reopenedFired);
+  const sink5 = new WebSink();
+  sink5.preload([ev(0, { type: "run.started", title: "y" })]); // not terminal
+  check("preload of a non-terminal stream leaves done false", sink5.done === false);
+
   console.log("\n== onDone fires once on a terminal event ==");
   const s3 = new WebSink();
   let doneCount = 0;

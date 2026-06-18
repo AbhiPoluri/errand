@@ -729,14 +729,18 @@ export const findDuplicates: Tool<
 function withinCutoff(within?: string): number | undefined {
   if (!within) return undefined;
   const w = within.trim().toLowerCase();
-  if (w === "today") {
+  if (w.includes("today")) {
     const d = new Date();
     d.setHours(0, 0, 0, 0);
     return d.getTime();
   }
+  if (w.includes("yesterday")) return Date.now() - 86_400_000;
+  if (w.includes("hour")) return Date.now() - 3_600_000;
   if (w.includes("week")) return Date.now() - 7 * 86_400_000;
   if (w.includes("month")) return Date.now() - 30 * 86_400_000;
   const days = Number(w.replace(/[^0-9.]/g, ""));
+  // Unrecognized vague phrases ("recently", "lately") → no limit (newest-first across all time),
+  // which is the sensible reading of those words.
   return days > 0 ? Date.now() - days * 86_400_000 : undefined;
 }
 
@@ -760,8 +764,13 @@ export const recentChanges: Tool<
   argsSchema: z.object({ dir: z.string().optional(), within: z.string().optional() }),
   gated: false,
   describe: (a) => ({ action: `Looking at what changed recently in ${a.dir ? name(a.dir) : "the folder"}`, reversibility: "reversible" }),
-  summarize: (r) =>
-    r.ok ? `Found ${r.data?.files?.length ?? 0} recently-changed file(s).` : (r.summary ?? "I couldn't check recent changes."),
+  summarize: (r) => {
+    if (!r.ok) return r.summary ?? "I couldn't check recent changes.";
+    const n = r.data?.files?.length ?? 0;
+    return r.data?.truncated
+      ? `Found ${n} recently-changed file(s) — the folder was too big to look through all of it, so there may be newer ones I didn't reach.`
+      : `Found ${n} recently-changed file(s).`;
+  },
   run: async (a, ctx) => {
     try {
       const root = resolveWithin(ctx.roots, a.dir ?? ".");
