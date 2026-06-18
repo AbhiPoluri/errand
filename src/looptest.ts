@@ -130,21 +130,38 @@ async function testFailingActionAborts() {
   check("messages well-formed after abort", wf.ok, wf.detail);
 }
 
-async function testSucceedingActionDoesNotAbort() {
-  console.log("\n== 2. same non-repeatable action SUCCEEDING 6x -> finishes, no abort ==");
-  // Succeeds 6 times (same args), then the model returns a final reply.
+async function testDistinctSuccessesDoNotAbort() {
+  console.log("\n== 2. DISTINCT-args actions succeeding many times -> finishes, no abort ==");
+  // Different args each turn (x: i) -> distinct signatures -> never counts as stuck. This is
+  // the real legitimate case: e.g. writing several different files in a row.
   const registry = new Registry().register(stubTool("do_thing", { result: { ok: true } }));
   const { runner, session, tap } = makeRunner(registry, (i) =>
-    i < 6 ? toolCallResp("do_thing", { x: 1 }, crypto.randomUUID()) : textResp("all done"),
+    i < 8 ? toolCallResp("do_thing", { x: i }, crypto.randomUUID()) : textResp("all done"),
   );
-  await runner.send("do the idempotent thing repeatedly", new AbortController().signal);
+  await runner.send("do eight distinct things", new AbortController().signal);
 
   const aborted = tap.events.some((e) => e.type === "run.error" && e.kind === "max_iterations");
   const finished = tap.events.some((e) => e.type === "run.finished");
   const wf = wellFormed(session.messages as Msg[]);
-  check("did NOT abort (success resets the counter)", !aborted);
+  check("did NOT abort (distinct signatures never collide)", !aborted);
   check("run finished normally", finished);
   check("messages well-formed", wf.ok, wf.detail);
+}
+
+async function testIdenticalSuccessLoopAborts() {
+  console.log("\n== 2b. same action SUCCEEDING with identical args 6x -> max_iterations (no-op loop) ==");
+  // The dangerous mode: an action that returns ok every time but changes nothing (a no-op click
+  // returns a readable page). Identical args + ok must STILL trip stuck-detection, not run to 300.
+  const registry = new Registry().register(stubTool("do_thing", { result: { ok: true } }));
+  const { runner, session, tap } = makeRunner(registry, () => toolCallResp("do_thing", { x: 1 }, crypto.randomUUID()));
+  await runner.send("click the same dead button forever", new AbortController().signal);
+
+  const aborted = tap.events.some((e) => e.type === "run.error" && e.kind === "max_iterations");
+  const runs = tap.events.filter((e) => e.type === "tool.started").length;
+  const wf = wellFormed(session.messages as Msg[]);
+  check("aborted even though every call succeeded", aborted);
+  check("aborted at the threshold (6 runs, not 300)", runs === 6, `ran ${runs}x`);
+  check("messages well-formed after abort", wf.ok, wf.detail);
 }
 
 async function testDeniedApprovalsDoNotAbort() {
@@ -216,7 +233,8 @@ async function testInvalidArgsStaysWellFormed() {
 
 async function main() {
   await testFailingActionAborts();
-  await testSucceedingActionDoesNotAbort();
+  await testDistinctSuccessesDoNotAbort();
+  await testIdenticalSuccessLoopAborts();
   await testDeniedApprovalsDoNotAbort();
   await testLengthExit();
   await testContentFilterExit();

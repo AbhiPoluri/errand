@@ -358,30 +358,28 @@ export class AgentRunner {
             ),
           );
 
-          // Stuck-detection (post-run, not at prepare-time). Only CONSECUTIVE genuine failures
-          // of the same non-repeatable action count as "stuck". A success resets the counter, so
-          // legitimately repeating an idempotent op (e.g. re-saving after a deny→approve, or the
-          // same write to several files) never aborts. Denied/expired/cancelled approvals and
-          // preflight failures `continue` above and never reach here, so the user merely pushing
-          // back can't trip it. Uncertain permanent actions are excluded (we already tell the
-          // model not to retry them).
-          if (!REPEATABLE.has(tool.name)) {
+          // Stuck-detection (post-run, not at prepare-time). Count EVERY executed call with a
+          // byte-identical (tool, args) signature — success OR failure. The most common real
+          // stuck mode is an action that SUCCEEDS every time but changes nothing (clicking a
+          // no-op/disabled button returns ok with a readable page; re-typing the same text;
+          // re-writing identical content), so resetting on success would let it burn all the way
+          // to MAX_ITERATIONS. Denied/expired/cancelled approvals and preflight failures `continue`
+          // above and never reach here (so the user pushing back can't trip it); uncertain
+          // permanent actions are excluded (we already tell the model not to retry them). Distinct
+          // args — e.g. writing several DIFFERENT files — have distinct signatures and never collide.
+          if (!REPEATABLE.has(tool.name) && !uncertain) {
             const sig = `${tool.name}:${JSON.stringify(args)}`;
-            if (result.ok) {
-              callCounts.set(sig, 0);
-            } else if (!uncertain) {
-              const n = (callCounts.get(sig) ?? 0) + 1;
-              callCounts.set(sig, n);
-              if (n >= STUCK_THRESHOLD) {
-                await this.emit({
-                  type: "run.error",
-                  kind: "max_iterations",
-                  userMessage:
-                    "I kept trying the same step without getting anywhere, so I paused. Want me to try a different way?",
-                  recoverable: true,
-                });
-                return "";
-              }
+            const n = (callCounts.get(sig) ?? 0) + 1;
+            callCounts.set(sig, n);
+            if (n >= STUCK_THRESHOLD) {
+              await this.emit({
+                type: "run.error",
+                kind: "max_iterations",
+                userMessage:
+                  "I kept trying the same step without getting anywhere, so I paused. Want me to try a different way?",
+                recoverable: true,
+              });
+              return "";
             }
           }
         }
