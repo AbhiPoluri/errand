@@ -17,6 +17,49 @@ async function shoot(ctx: { onScreenshot?: (d: string) => void }): Promise<void>
   if (url) ctx.onScreenshot?.(url);
 }
 
+const MAX_OBS_ELEMENTS = 50;
+const MAX_OBS_TEXT = 1500;
+const MAX_OBS_LABEL = 40;
+
+// After EVERY browser action, hand the model the resulting page (not just "done"). This is the
+// act→observe loop: the model has to see what its click/type actually produced so it can verify
+// the action did what it intended instead of assuming success. Returns null if the page can't be
+// read (callers must then NOT report clean success). Sizes are budgeted to stay under the 8KB
+// tool-result cap so the observation never truncates mid-JSON. Screenshot still streams to the UI.
+async function observe(ctx: { onScreenshot?: (d: string) => void }) {
+  await shoot(ctx);
+  const snap = await browser.snapshot();
+  if (!snap) return null;
+  browser.setLastElements(snap.elements); // keep click/type indices pointing at the CURRENT page
+  return {
+    title: snap.title.slice(0, 200),
+    text: snap.text.length > MAX_OBS_TEXT ? snap.text.slice(0, MAX_OBS_TEXT) + "…" : snap.text,
+    elements: snap.elements
+      .slice(0, MAX_OBS_ELEMENTS)
+      .map((e) => ({ ...e, label: (e.label ?? "").slice(0, MAX_OBS_LABEL) })),
+    elementCount: snap.elements.length,
+  };
+}
+
+// Build the tool result when an action's post-page couldn't be read. A clean { ok:true } here
+// is the original assume-success bug — so we refuse to report success with no observation.
+// A risky click might have COMMITTED something → "uncertain" (the loop tells the model not to
+// retry, to verify). Everything else is safe to look-again-and-retry.
+function unverified(risky: boolean): ToolResult {
+  return risky
+    ? {
+        ok: false,
+        outcome: "uncertain",
+        error: "unreadable_after_action",
+        summary: "I did that, but couldn't read the page afterward — since it might have done something, please check before I try again.",
+      }
+    : {
+        ok: false,
+        error: "unreadable_after_action",
+        summary: "I couldn't read the page after that — let me look at it again before continuing.",
+      };
+}
+
 export const browserNavigate: Tool<{ url: string }> = {
   name: "browser_navigate",
   modelDescription: "Open a web page in the user's browser. Use a full https URL. Read-only.",
@@ -35,13 +78,13 @@ export const browserNavigate: Tool<{ url: string }> = {
     } catch {}
     return { action: `Opening ${host}`, reversibility: "reversible" };
   },
-  summarize: (r) => (r.ok ? "Opened the page." : (r.summary ?? "I couldn't open that page.")),
+  summarize: (r) => (r.ok ? `Opened ${(r.data as any)?.title ? `"${(r.data as any).title}"` : "the page"}.` : (r.summary ?? "I couldn't open that page.")),
   run: async (a, ctx): Promise<ToolResult> => {
     if (!browser.isConnected()) return NOT_CONNECTED;
     try {
       await browser.navigate(a.url);
-      await shoot(ctx);
-      return { ok: true, data: { url: a.url } };
+      const obs = await observe(ctx);
+      return obs ? { ok: true, data: { url: a.url, ...obs } } : unverified(false);
     } catch (e: any) {
       return { ok: false, error: String(e?.message ?? e) };
     }
@@ -82,7 +125,7 @@ function elementName(index: number): { name: string; risky: boolean } {
 export const browserClick: Tool<{ index: number }> = {
   name: "browser_click",
   modelDescription:
-    "Click an element by its index from browser_read. This changes things on the real site (it may submit, send, or buy) and cannot be undone.",
+    "Click an element by its index from browser_read. This changes the real site (it may submit, send, or buy) and can't be undone. The result is the page AFTER the click — ALWAYS check it: did the right thing actually open or change? A click can land on the wrong element or do nothing. If the page isn't what you expected, DON'T assume it worked — read it again, scroll, or try a different element before moving on.",
   jsonSchema: {
     type: "object",
     additionalProperties: false,
@@ -99,13 +142,16 @@ export const browserClick: Tool<{ index: number }> = {
       reversibility: risky ? "unknown" : "reversible",
     };
   },
-  summarize: (r) => (r.ok ? "Done." : (r.summary ?? "I couldn't click that.")),
+  summarize: (r) => (r.ok ? `Clicked — the page is now ${(r.data as any)?.title ? `"${(r.data as any).title}"` : "updated"}.` : (r.summary ?? "I couldn't click that.")),
   run: async (a, ctx): Promise<ToolResult> => {
     if (!browser.isConnected()) return NOT_CONNECTED;
     try {
+      const { risky } = elementName(a.index); // capture risk while the index still points at this page
       await browser.clickIndex(a.index);
-      await shoot(ctx);
-      return { ok: true };
+      // Return the resulting page so the model can VERIFY the click did what it intended. If we
+      // can't read it, refuse to report success (that's the assume-it-worked bug).
+      const obs = await observe(ctx);
+      return obs ? { ok: true, data: obs } : unverified(risky);
     } catch (e: any) {
       return { ok: false, error: String(e?.message ?? e), summary: "That item wasn't there — let me look again." };
     }
@@ -115,7 +161,7 @@ export const browserClick: Tool<{ index: number }> = {
 export const browserType: Tool<{ index: number; text: string }> = {
   name: "browser_type",
   modelDescription:
-    "Type text into an input field by its index from browser_read (e.g. a search box or form field).",
+    "Type text into an input field by its index from browser_read (e.g. a search box or form field). The result is the page after typing — check your text actually landed in the field before submitting.",
   jsonSchema: {
     type: "object",
     additionalProperties: false,
@@ -131,13 +177,13 @@ export const browserType: Tool<{ index: number; text: string }> = {
     const { name } = elementName(a.index);
     return { action: `Type "${a.text.slice(0, 40)}" into ${name}`, reversibility: "reversible" };
   },
-  summarize: (r) => (r.ok ? "Done." : (r.summary ?? "I couldn't type there.")),
+  summarize: (r) => (r.ok ? "Typed that in." : (r.summary ?? "I couldn't type there.")),
   run: async (a, ctx): Promise<ToolResult> => {
     if (!browser.isConnected()) return NOT_CONNECTED;
     try {
       await browser.typeIndex(a.index, a.text);
-      await shoot(ctx);
-      return { ok: true };
+      const obs = await observe(ctx); // show the model the field with the text in it
+      return obs ? { ok: true, data: obs } : unverified(false); // typing doesn't submit → safe to look-again
     } catch (e: any) {
       return { ok: false, error: String(e?.message ?? e), summary: "That field wasn't there — let me look again." };
     }
@@ -164,8 +210,8 @@ export const browserScroll: Tool<{ to?: "down" | "up" | "top" | "bottom"; amount
     if (!browser.isConnected()) return NOT_CONNECTED;
     try {
       await browser.scroll(a.to ?? "down", a.amount);
-      await shoot(ctx);
-      return { ok: true };
+      const obs = await observe(ctx); // reveal what's now on screen, no separate read needed
+      return obs ? { ok: true, data: obs } : unverified(false);
     } catch (e: any) {
       return { ok: false, error: String(e?.message ?? e) };
     }
