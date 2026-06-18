@@ -22,14 +22,49 @@ const MAX_OBS_ELEMENTS = 50;
 const MAX_OBS_TEXT = 1500;
 const MAX_OBS_LABEL = 40;
 
+// Settling: after a click/type/navigate the page often keeps changing for a moment — a dropdown
+// animates open, a menu's items stream in, an AJAX panel loads. Reading it the instant the action
+// returns catches that mid-transition stale view, so the model clicks the wrong (or not-yet-there)
+// thing. Instead we "take our time": wait a floor for the transition to BEGIN, then poll the page
+// until two consecutive reads match (it's stopped changing) — bounded so a perpetually-animating
+// page can't hang us. Adaptive: a static page settles in one extra read; a slow menu waits longer.
+const SETTLE_FLOOR_MS = 400; // let a just-triggered menu/transition start before the first read
+const SETTLE_POLL_MS = 350; // gap between stability checks
+const SETTLE_MAX_POLLS = 6; // ~2.5s ceiling on settling before we read what we have anyway
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+type Snap = NonNullable<Awaited<ReturnType<typeof browser.snapshot>>>;
+// Two reads are "the same page" when title, count of interactive elements, and text length agree
+// (a small text wobble — a ticking clock — is tolerated so it doesn't block settling forever).
+function sameView(a: Snap, b: Snap): boolean {
+  return a.title === b.title && a.elements.length === b.elements.length && Math.abs(a.text.length - b.text.length) < 24;
+}
+
+// Snapshot the page only once it has stopped changing.
+async function settledSnapshot(): Promise<Snap | null> {
+  await sleep(SETTLE_FLOOR_MS);
+  let prev = await browser.snapshot();
+  if (!prev) return null;
+  for (let i = 0; i < SETTLE_MAX_POLLS; i++) {
+    await sleep(SETTLE_POLL_MS);
+    const next = await browser.snapshot();
+    if (!next) return prev; // lost the read — return the last good one rather than null
+    if (sameView(prev, next)) return next; // stopped changing → settled
+    prev = next;
+  }
+  return prev; // still changing at the ceiling — read what we have
+}
+
 // After EVERY browser action, hand the model the resulting page (not just "done"). This is the
 // act→observe loop: the model has to see what its click/type actually produced so it can verify
 // the action did what it intended instead of assuming success. Returns null if the page can't be
 // read (callers must then NOT report clean success). Sizes are budgeted to stay under the 8KB
 // tool-result cap so the observation never truncates mid-JSON. Screenshot still streams to the UI.
 async function observe(ctx: { onScreenshot?: (d: string) => void }) {
+  // Wait for the page to settle FIRST, then read + screenshot it — so both the model's element list
+  // and the UI screenshot show the finished state (menu open, content loaded), not a mid-transition.
+  const snap = await settledSnapshot();
   await shoot(ctx);
-  const snap = await browser.snapshot();
   if (!snap) return null;
   browser.setLastElements(snap.elements); // keep click/type indices pointing at the CURRENT page
   return {
