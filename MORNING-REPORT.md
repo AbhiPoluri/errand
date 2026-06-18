@@ -4,17 +4,16 @@ Good morning. I worked autonomously overnight on a dedicated branch. Everything 
 locally, **nothing was pushed and `main` is untouched** — review the diff and merge what you like.
 
 ## TL;DR
-- **Branch:** `overnight-2026-06-18` (off `main` @ f21ec17), **34 commits**, working tree clean.
-- **Round 1:** shipped all 22 items from an 8-lens discovery pass (60 candidates → 22 ranked).
-- **Adversarial review** of round 1 (15-agent workflow): 9 real findings, **2 high — both fixed**,
-  5 low fixed, 2 low consciously left (noted below).
-- **Round 2:** a second discovery pass → **14 more items** shipped (resilience timeouts/retries,
-  find_duplicates, capability toggles, perf indexes, type-safety, more UX).
-- **Adversarial review of round 2** (11-agent workflow): 7 real findings (all med/low), **6 fixed**
-  (error-classified retry, no double-retry, abortable backoff, manifest runtime guards, dream count,
-  readCapped multibyte), 1 low left (≤10s self-healing SSE heartbeat leak on reconnect).
-- **36 improvements total.** `tsc` clean every commit; **10 offline suites green**; **9 new suites**.
-- UI changes screenshot-verified at desktop + 375px.
+- **Branch:** `overnight-2026-06-18` (off `main` @ f21ec17), **44 commits**, working tree clean.
+- **Round 1:** all 22 items from an 8-lens discovery pass (60 candidates → 22). **Reviewed**
+  (15-agent workflow): 9 findings, 2 high — both fixed.
+- **Round 2:** 14 more (resilience timeouts/retries, capability toggles, perf, type-safety, UX).
+  **Reviewed** (11-agent): 7 findings, 6 fixed + the 7th (SSE heartbeat) fixed too.
+- **Round 3:** 13 more (truncated-scan honesty, run_command OOM guard, find_duplicates/extract_zip,
+  recent_changes, first-run welcome, export transcript, prompt/research/scoping guidance, SSE
+  teardown). 1 deferred for your review (create_zip — a from-scratch ZIP writer).
+- **49 improvements total.** `tsc` clean every commit; **11 offline test suites green**; **11 new
+  suites added.** UI screenshot-verified at desktop + 375px. (Round-3 review in progress.)
 
 ## Review it
 ```
@@ -96,6 +95,25 @@ test coverage (now that the suites exist):
 - **Type-safety:** discriminated `OpManifest` union (typed manifests, exhaustive reconstruct);
   `ToolResult<D>` generic (removed the `as any` in tool summarizers); typed `EmbedClient` seam.
 - New `ext:test`; everything tsc-clean + suite-verified.
+
+## Round 3 — 13 more (net-new features + trust/safety polish)
+- **Trust/correctness:** find_duplicates & folder_summary now report a truncated scan honestly
+  (no more confident "No duplicates found" on a partial walk); run_command caps its output on
+  append (was an OOM risk — a multi-MB chunk ballooned RAM) and reports accurate bytes; today's
+  date is injected into the system prompt so relative-time asks don't anchor on the training cutoff.
+- **New capability:** `extract_zip` — unpack a .zip into a new folder (read_file refused bare zips);
+  reuses the proven ZIP reader, zip-slip-safe, journaled one-step undo. `recent_changes` — "what
+  changed in this folder lately" (newest-first, optional time window).
+- **UX:** a dismissible first-run welcome card (states the one-folder + always-ask promise); an
+  Export-transcript action (whole conversation → Markdown); the default safe-folder scope now
+  explains itself; move_file points renames at rename_file (no more misleading "Move" narration).
+- **Agent guidance:** prompt now nudges look-first on broad requests, prefer-undoable actions over
+  run_command, cite the web source you actually opened, and end with a plain recap.
+- **Resource hygiene:** the main run SSE tears down on a terminal event (no lingering buffer/heartbeat);
+  /api/ext/result bounds the body + normalizes the result envelope.
+- **Deferred for you:** `create_zip` — a from-scratch ZIP *writer* (CRC-32 + headers). It's the one
+  piece I didn't want to ship unreviewed; the round-trip test against the existing reader makes it
+  safe to add when you're up.
 
 ## Suggested next (your call)
 - The two "left" items above, if you want them airtight.

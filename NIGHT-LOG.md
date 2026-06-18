@@ -119,5 +119,23 @@ ALL PASS, tsc clean.
 - **LEFT low** SSE heartbeat leaks ≤10s on reconnect-supersede (self-heals on next tick).
 34 commits. Full sweep ALL PASS, tsc clean. See MORNING-REPORT.md.
 
+### ROUND 3 — 13 more items shipped (net-new features + trust/safety polish)
+3rd discovery pass (net-new safe value). Shipped 13 of 14 (create_zip deferred for review):
+1. find_duplicates/folder_summary report truncated scans honestly (no false "none found"). ✅ fileops
+2. run_command caps output on append (OOM guard) + accurate bytes. ✅ bash:test (new)
+3. today's date injected into the system prompt (relative-time correctness). ✅ tsc
+4. first-run welcome card (dismissible, localStorage). ✅ tsc/review
+5. export run transcript to Markdown. ✅ tsc/review
+6. move_file points renames at rename_file (verb overlap). ✅ fileops
+7. safe-folder scope copy explained on the default. ✅ screenshot
+8. web_search/prompt steer toward opening + citing a source. ✅ web:test
+9. prompt: scoping discipline + end-of-task recap + prefer-built-in actions. ✅ tsc
+10. extract_zip — unpack a .zip into a new folder, zip-slip safe + journaled undo. ✅ fileops:test
+12. recent_changes tool ("what changed lately") + chip. ✅ fileops:test
+13. /api/ext/result body bound + result-envelope normalize. ✅ ext:test
+14. webSink onDone → run SSE tears down on terminal (no lingering buffer/heartbeat). ✅ websink:test
+DEFERRED: 11 (create_zip — from-scratch ZIP writer; wants review). New suite: `bash:test`.
+44 commits. Full sweep (loop/web/fileops/journal/embed/store/websink/ext/bash/restart/cap) ALL PASS, tsc clean.
+
 ## Parked / needs Abhiram
 _(none yet)_
