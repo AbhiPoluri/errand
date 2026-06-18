@@ -17,6 +17,7 @@ import {
   statSync,
 } from "node:fs";
 import { join, dirname } from "node:path";
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { Tool, ToolResult } from "./index.ts";
 import {
@@ -595,10 +596,112 @@ export const folderSummary: Tool<{ dir?: string }> = {
   },
 };
 
+// ---- find_duplicates (read-only) — backs the "find duplicate files" example chip. Groups by
+// size first (cheap), then content-hashes only the size-collisions so it never reads the whole
+// tree. Read-only: it REPORTS duplicate sets; the agent uses move_file/delete_file to act. ----
+export const findDuplicates: Tool<{ dir?: string }> = {
+  name: "find_duplicates",
+  modelDescription:
+    "Find sets of duplicate files (byte-for-byte identical) inside a folder, recursively. Read-only — it reports the duplicate groups and which copy to keep; use move_file/delete_file to round them up.",
+  jsonSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: { dir: { type: "string", description: "Folder to scan (default: the working folder)." } },
+  },
+  argsSchema: z.object({ dir: z.string().optional() }),
+  gated: false,
+  describe: (a) => ({ action: `Looking for duplicate files in ${a.dir ? name(a.dir) : "the folder"}`, reversibility: "reversible" }),
+  summarize: (r) => {
+    if (!r.ok) return r.summary ?? "I couldn't scan for duplicates.";
+    const d = r.data as any;
+    const sets = d?.groups?.length ?? 0;
+    return sets
+      ? `Found ${sets} set${sets === 1 ? "" : "s"} of duplicates — about ${humanBytes(d.wastedBytes ?? 0)} could be freed.`
+      : "No duplicate files found.";
+  },
+  run: async (a, ctx) => {
+    try {
+      const root = resolveWithin(ctx.roots, a.dir ?? ".");
+      assertRealWithin(ctx.roots, root);
+      const MAX_NODES = 20_000;
+      const MAX_DEPTH = 8;
+      let nodes = 0;
+      let truncated = false;
+      const bySize = new Map<number, string[]>(); // candidate paths grouped by exact size
+
+      const walk = (dir: string, depth: number): void => {
+        if (truncated || depth > MAX_DEPTH) return;
+        let entries: import("node:fs").Dirent[];
+        try {
+          entries = readdirSync(dir, { withFileTypes: true });
+        } catch {
+          return;
+        }
+        for (const d of entries) {
+          if (d.isDirectory() && d.name === ".errand-review") continue; // our own undo store
+          if (nodes >= MAX_NODES) {
+            truncated = true;
+            return;
+          }
+          nodes++;
+          const full = join(dir, d.name);
+          if (d.isDirectory()) walk(full, depth + 1);
+          else if (d.isFile()) {
+            let size = 0;
+            try {
+              size = statSync(full).size;
+            } catch {
+              continue;
+            }
+            if (size === 0 || size > MAX_FILE_BYTES) continue; // empties never "duplicate"; huge files skipped
+            const arr = bySize.get(size) ?? [];
+            arr.push(full);
+            bySize.set(size, arr);
+          }
+        }
+      };
+      walk(root, 0);
+
+      // Only hash files whose SIZE collides — identical files must share a size, so this avoids
+      // reading the whole tree.
+      const groups: { size: number; paths: string[]; keeper: string; wastedBytes: number }[] = [];
+      let wastedBytes = 0;
+      for (const [size, paths] of bySize) {
+        if (paths.length < 2) continue;
+        const byHash = new Map<string, string[]>();
+        for (const p of paths) {
+          let h: string;
+          try {
+            h = createHash("sha1").update(readFileSync(p)).digest("hex");
+          } catch {
+            continue;
+          }
+          const arr = byHash.get(h) ?? [];
+          arr.push(p);
+          byHash.set(h, arr);
+        }
+        for (const dupes of byHash.values()) {
+          if (dupes.length < 2) continue;
+          // keeper = shortest path (the "original" tends to live in a shallower/cleaner spot).
+          const keeper = dupes.slice().sort((x, y) => x.length - y.length)[0];
+          const wasted = size * (dupes.length - 1);
+          wastedBytes += wasted;
+          groups.push({ size, paths: dupes, keeper, wastedBytes: wasted });
+        }
+      }
+      groups.sort((x, y) => y.wastedBytes - x.wastedBytes);
+      return { ok: true, data: { dir: root, groups, wastedBytes, truncated } };
+    } catch (e) {
+      return fail(e);
+    }
+  },
+};
+
 export const fileTools = [
   listFiles,
   readFile,
   folderSummary,
+  findDuplicates,
   makeFolder,
   writeFile,
   moveFile,

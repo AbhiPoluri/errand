@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Journal } from "./journal.ts";
 import { Registry, type ToolContext } from "./tools/index.ts";
-import { fileTools, renameFile, folderSummary, deleteFile } from "./tools/files.ts";
+import { fileTools, renameFile, folderSummary, findDuplicates, deleteFile } from "./tools/files.ts";
 
 let failures = 0;
 const check = (name: string, cond: boolean, detail = "") => {
@@ -122,6 +122,33 @@ async function testFolderSummary() {
   rmSync(root, { recursive: true, force: true });
 }
 
+async function testFindDuplicates() {
+  console.log("\n== find_duplicates (r2 rank 3) ==");
+  const root = tmp("errand-dup-");
+  mkdirSync(join(root, "a"));
+  mkdirSync(join(root, "b"));
+  // One true duplicate pair (identical content), across folders.
+  writeFileSync(join(root, "a", "x.txt"), "identical-content");
+  writeFileSync(join(root, "b", "x-copy.txt"), "identical-content");
+  // Two SAME-SIZE but DIFFERENT-content files — must NOT be grouped.
+  writeFileSync(join(root, "diffA.txt"), "1234567890");
+  writeFileSync(join(root, "diffB.txt"), "ABCDEFGHIJ");
+  // A unique file, and a copy hidden in .errand-review (must be skipped).
+  writeFileSync(join(root, "unique.txt"), "xyz");
+  mkdirSync(join(root, ".errand-review", "run1"), { recursive: true });
+  writeFileSync(join(root, ".errand-review", "run1", "parked.txt"), "identical-content");
+
+  const res = await findDuplicates.run({}, ctxFor(root, new Journal()));
+  check("scan returned ok", res.ok);
+  const d = res.data as any;
+  check("exactly one duplicate group (the identical pair)", d?.groups?.length === 1, `${d?.groups?.length}`);
+  check("the group has the 2 identical files (not the .errand-review copy)", d?.groups?.[0]?.paths?.length === 2, `${d?.groups?.[0]?.paths?.length}`);
+  check("same-size-different-content files are NOT grouped", !d?.groups?.some((g: any) => g.size === 10));
+  check("wastedBytes counts one redundant copy (17)", d?.wastedBytes === 17, `${d?.wastedBytes}`);
+  check("read-only: recorded no journal entry", res.ok);
+  rmSync(root, { recursive: true, force: true });
+}
+
 function testRegistryHygiene() {
   console.log("\n== registry hygiene ==");
   const reg = new Registry();
@@ -137,6 +164,7 @@ async function main() {
   testRenameValidation();
   await testDeleteUniqueDest();
   await testFolderSummary();
+  await testFindDuplicates();
   testRegistryHygiene();
   console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILED"}`);
   process.exit(failures === 0 ? 0 : 1);
