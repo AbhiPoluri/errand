@@ -14,7 +14,7 @@ const dbPath = join(tmpdir(), `errand-restarttest-${process.pid}.db`);
 process.env.ERRAND_DB = dbPath; // MUST be set before store.ts opens the DB
 const store = await import("./server/store.ts");
 // journalRestore + runRegistry transitively open the DB, so import them AFTER ERRAND_DB is set.
-const { rebuildJournalFromStore } = await import("./server/journalRestore.ts");
+const { rebuildJournalFromStore, reconstructInverse } = await import("./server/journalRestore.ts");
 import type { AgentEvent } from "./events.ts";
 
 let failures = 0;
@@ -135,6 +135,13 @@ async function main(): Promise<void> {
     "double-undo left the unrelated file intact",
     existsSync(join(ws, "moved.txt")) && readFileSync(join(ws, "moved.txt"), "utf8") === "UNRELATED",
   );
+
+  // A corrupt-but-known-kind manifest (valid JSON, missing required fields — e.g. schema drift or
+  // a partial write) must reconstruct to NO inverse, not a closure that lies about undoability.
+  check("corrupt move manifest -> no inverse", reconstructInverse({ manifest: { kind: "move" } as any }) === undefined);
+  check("corrupt copy manifest -> no inverse", reconstructInverse({ manifest: { kind: "copy" } as any }) === undefined);
+  check("corrupt write manifest -> no inverse", reconstructInverse({ manifest: { kind: "write", wasNew: true } as any }) === undefined);
+  check("valid move manifest -> has a real inverse", typeof reconstructInverse({ manifest: { kind: "move", from: "/a", to: "/b" } }) === "function");
 
   // ---- undoRun() on a run NOT in memory rehydrates + rebuilds instead of 404ing ----
   console.log("\n-- undoRun on an out-of-memory run --");

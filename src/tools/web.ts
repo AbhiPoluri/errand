@@ -30,15 +30,18 @@ export async function readCapped(
     return (await res.text()).slice(0, maxBytes);
   }
   const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
+  // Decode incrementally (stream:true buffers a partial multibyte sequence that straddles a chunk
+  // OR the cap boundary), so we never cut a UTF-8 char in half into a U+FFFD. Whole chunks only.
+  const dec = new TextDecoder("utf-8");
+  let out = "";
   let total = 0;
   try {
     while (total < maxBytes) {
       const { done, value } = await reader.read();
       if (done) break;
       if (value) {
-        chunks.push(value);
         total += value.length;
+        out += dec.decode(value, { stream: true });
       }
     }
   } finally {
@@ -48,7 +51,8 @@ export async function readCapped(
       /* already closed */
     }
   }
-  return Buffer.concat(chunks).subarray(0, maxBytes).toString("utf8");
+  out += dec.decode(); // flush any trailing buffered bytes
+  return out;
 }
 
 function decodeEntities(s: string): string {

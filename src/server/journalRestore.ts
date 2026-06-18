@@ -15,8 +15,13 @@ import * as store from "./store.ts";
 export function reconstructInverse(op: { manifest: OpManifest | null }): (() => Promise<void>) | undefined {
   const m = op.manifest;
   if (!m) return undefined;
+  // The manifest came through a JSON.parse + cast (store.getJournalOps), so the OpManifest type is
+  // NOT a runtime guarantee — a corrupt/partial row could be valid JSON with a known `kind` but
+  // missing fields. Re-check the fields a closure depends on; if they're absent, return undefined
+  // (entry shown non-undoable) rather than a closure that lies about undoability.
   switch (m.kind) {
     case "move": // move_file and rename_file both record this
+      if (typeof m.from !== "string" || typeof m.to !== "string") return undefined;
       // Guard BOTH ends: only move back if the moved file is still at `to` AND nothing new has been
       // created at the original `from` — without the `!existsSync(from)`, undoing twice (or after an
       // unrelated file was recreated at `from`) would clobber it.
@@ -24,14 +29,17 @@ export function reconstructInverse(op: { manifest: OpManifest | null }): (() => 
         if (existsSync(m.to) && !existsSync(m.from)) renameSync(m.to, m.from);
       };
     case "delete": // file was parked in the Review folder; move it back
+      if (typeof m.from !== "string" || typeof m.dest !== "string") return undefined;
       return async () => {
         if (existsSync(m.dest) && !existsSync(m.from)) renameSync(m.dest, m.from);
       };
     case "copy": // remove the copy
+      if (typeof m.to !== "string") return undefined;
       return async () => {
         rmSync(m.to, { recursive: true, force: true });
       };
     case "make_folder": // remove only if still empty (never delete a folder the user filled)
+      if (typeof m.path !== "string") return undefined;
       return async () => {
         try {
           rmdirSync(m.path);
@@ -40,6 +48,7 @@ export function reconstructInverse(op: { manifest: OpManifest | null }): (() => 
         }
       };
     case "write": {
+      if (typeof m.path !== "string") return undefined;
       if (m.wasNew) return async () => rmSync(m.path, { force: true }); // created → delete
       const snap = m.snapshot;
       if (typeof snap === "string" && snap && existsSync(snap)) {

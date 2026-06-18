@@ -97,7 +97,11 @@ export async function dream(): Promise<{ added: number; merged: number; removed:
   // store twice per new fact: addMemory returns '' on blank, the existing id on an exact dup, or a
   // fresh id otherwise — so a non-empty, not-yet-seen id means a genuinely new row.
   let added = 0;
-  const known = new Set(memList.map((m) => m.id));
+  // Seed from a FRESH read taken AFTER the model await, not the pre-await memList snapshot: a fact
+  // a concurrent run live-saved during the (multi-second) await would otherwise be returned by
+  // addMemory as an EXISTING id absent from the snapshot and miscounted as added. One read, not the
+  // per-fact N+1 this replaced.
+  const known = new Set(store.listMemories().map((m) => m.id));
   for (const m of newMemories) {
     const id = await store.addMemory(m.text, m.kind ?? "fact", "dream");
     if (id && !known.has(id)) {

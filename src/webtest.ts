@@ -63,6 +63,16 @@ check("caps the body at maxBytes", capped.length <= 5000, `${capped.length}`);
 check("cancels the reader once it has enough (no infinite read)", cancelled);
 const fb = await readCapped({ text: async () => "x".repeat(10) }, 4);
 check("falls back to text() + slices when there's no stream", fb === "xxxx", fb);
+// A multibyte char straddling the cap must NOT decode to U+FFFD (streaming TextDecoder).
+const emojiStream = new ReadableStream<Uint8Array>({
+  start(c) {
+    c.enqueue(new TextEncoder().encode("aaaa")); // 4 bytes
+    c.enqueue(new TextEncoder().encode("😀😀")); // 8 bytes; cap lands mid-first-emoji
+    c.close();
+  },
+});
+const decoded = await readCapped({ body: emojiStream, text: async () => "" }, 6);
+check("no U+FFFD from a multibyte split at the cap", !decoded.includes("�"), JSON.stringify(decoded));
 
 console.log("\n== withDeadline aborts on a stalled host ==");
 const sig = withDeadline(new AbortController().signal, 10);
