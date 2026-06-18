@@ -11,9 +11,11 @@ locally, **nothing was pushed and `main` is untouched** — review the diff and 
   **Reviewed** (11-agent): 7 findings, 6 fixed + the 7th (SSE heartbeat) fixed too.
 - **Round 3:** 13 more (truncated-scan honesty, run_command OOM guard, find_duplicates/extract_zip,
   recent_changes, first-run welcome, export transcript, prompt/research/scoping guidance, SSE
-  teardown). 1 deferred for your review (create_zip — a from-scratch ZIP writer).
-- **49 improvements total.** `tsc` clean every commit; **11 offline test suites green**; **11 new
-  suites added.** UI screenshot-verified at desktop + 375px. (Round-3 review in progress.)
+  teardown). 1 deferred for your review (create_zip — a from-scratch ZIP writer). **Reviewed**
+  (11-agent): 6 findings (extract_zip had none), 5 fixed, 1 low left (chunked-body bound, not a
+  regression, localhost-only).
+- **49 improvements, 3 adversarial-review passes (~19 findings fixed), 46 commits.** `tsc` clean
+  every commit; **11 offline test suites green**; **11 new suites added.** UI screenshot-verified.
 
 ## Review it
 ```

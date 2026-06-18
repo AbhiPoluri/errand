@@ -135,7 +135,17 @@ ALL PASS, tsc clean.
 13. /api/ext/result body bound + result-envelope normalize. ✅ ext:test
 14. webSink onDone → run SSE tears down on terminal (no lingering buffer/heartbeat). ✅ websink:test
 DEFERRED: 11 (create_zip — from-scratch ZIP writer; wants review). New suite: `bash:test`.
-44 commits. Full sweep (loop/web/fileops/journal/embed/store/websink/ext/bash/restart/cap) ALL PASS, tsc clean.
+
+### Round-3 adversarial review (11-agent) → 6 findings, 5 fixed (extract_zip: zero findings)
+- **FIXED med** preload() didn't set done → rank-14 SSE teardown never fired for a REOPENED finished run. ✅ websink:test
+- **FIXED med** recent_changes.summarize ignored truncated (reintroduced the rank-1 gap). ✅ fileops:test
+- **FIXED low** bash bytes counted UTF-16 units → Buffer.byteLength. ✅
+- **FIXED low** withinCutoff ignored 'yesterday'/'as of today'/hour → loosened. ✅
+- **FIXED low** welcome card could flash for returning users → gated on homeLoaded. ✅
+- **LEFT low** /api/ext/result body bound bypassable for chunked bodies (not a regression, localhost-only).
+
+46 commits. Full sweep (loop/web/fileops/journal/embed/store/websink/ext/bash/restart/cap) ALL PASS, tsc clean.
+**Totals: 49 improvements across 3 discovery rounds + 3 adversarial-review passes (~19 findings fixed).**
 
 ## Parked / needs Abhiram
 _(none yet)_
