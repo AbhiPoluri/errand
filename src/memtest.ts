@@ -69,6 +69,12 @@ async function main(): Promise<void> {
     if (mode !== "semantic") throw new Error(`expected semantic mode with 16 memories, got "${mode}"`);
   }
 
+  // Relevance floor: a query unrelated to EVERY memory injects nothing (so an off-topic memory
+  // can't bleed into a task — the bug that derailed a small model with "Portland hotel deals").
+  const unrelated = await store.rankMemories("explain quantum entanglement in particle physics", 10);
+  const floorOk = unrelated.scored.length === 0;
+  console.log(`Unrelated query → ${unrelated.scored.length} injected ${floorOk ? "✓ (clean)" : "✗ (expected 0)"}`);
+
   // --- concurrency: simulate the post-migration window (all embeddings NULL) and fire two
   // retrievals at once. The single-flight backfill must embed once AND re-hydrate BOTH
   // callers' rows — if the non-pass caller kept NULL rows it would score them -1 and rank wrong.
@@ -84,8 +90,8 @@ async function main(): Promise<void> {
   console.log(`Concurrent backfill: tax-query ${aOk ? "✓" : "✗"} (${a.scored[0]?.score.toFixed(3)}), ` +
     `wedding-query ${bOk ? "✓" : "✗"} (${b.scored[0]?.score.toFixed(3)})`);
 
-  const allPass = pass === CASES.length && aOk && bOk;
-  console.log(`\nRESULT: ${pass}/${CASES.length} ranking + ${aOk && bOk ? "2/2" : "FAILED"} concurrent backfill.`);
+  const allPass = pass === CASES.length && aOk && bOk && floorOk;
+  console.log(`\nRESULT: ${pass}/${CASES.length} ranking + ${aOk && bOk ? "2/2" : "FAILED"} concurrent + relevance-floor ${floorOk ? "✓" : "✗"}.`);
   if (!allPass) process.exitCode = 1;
 }
 

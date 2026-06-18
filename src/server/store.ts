@@ -178,8 +178,12 @@ export interface Memory {
   createdAt: number;
 }
 
-// How many memories to inject once the set is large enough to filter (handoff: k≈10).
+// Most memories to inject for one task (a ceiling, not a target — the floor below usually keeps it smaller).
 const EMBED_TOP_K = 10;
+// Minimum cosine similarity to inject a memory at all. Memories UNRELATED to the task (e.g.
+// "Portland hotel deals" for a YouTube request) score well below this and are dropped, so an
+// off-topic memory can't bleed into the conversation — which especially derails small models.
+const RELEVANCE_FLOOR = 0.3;
 
 export async function addMemory(text: string, kind = "fact", source: string | null = null): Promise<string> {
   const trimmed = text.trim();
@@ -292,26 +296,27 @@ export interface ScoredMemory {
   score: number;
 }
 
-// Core retrieval. Returns the top-K memories scored against the query, plus the `mode` used
-// so callers/tests can see WHY (small set, embedding outage, or real semantic ranking):
-//   - "all":      few enough memories that filtering buys nothing → return them all (no API call)
-//   - "recency":  embedding the query failed → fall back to newest-first (old behavior)
-//   - "semantic": scored by cosine similarity to the query
+// Core retrieval. Embeds the task and returns ONLY the memories genuinely related to it
+// (cosine ≥ RELEVANCE_FLOOR), newest-relevant first, capped at k. Critically this runs for
+// EVERY size of memory set — there is no "inject them all when small" shortcut, because that
+// is exactly what let an off-topic memory bleed in. `mode` says why:
+//   - "semantic": embedded + cosine-filtered (the normal path; may legitimately return none)
+//   - "recency":  embedding the query failed → newest-first fallback so memory still works offline
 export async function rankMemories(
   query: string,
   k = EMBED_TOP_K,
-): Promise<{ scored: ScoredMemory[]; mode: "all" | "recency" | "semantic" }> {
+): Promise<{ scored: ScoredMemory[]; mode: "recency" | "semantic" }> {
   const rows = listMemoryRows(); // newest first
-  if (rows.length <= k) {
-    return { scored: rows.map((m) => ({ id: m.id, text: m.text, score: 1 })), mode: "all" };
-  }
+  if (!rows.length) return { scored: [], mode: "semantic" };
   await backfillEmbeddings(rows);
   const qvec = await embed(query);
   if (!qvec) {
+    // Embedding outage: fall back to a few most-recent so memory isn't silently lost.
     return { scored: rows.slice(0, k).map((m) => ({ id: m.id, text: m.text, score: 0 })), mode: "recency" };
   }
   const scored = rows
     .map((m) => ({ id: m.id, text: m.text, score: m.embedding ? cosineSimilarity(qvec, m.embedding) : -1 }))
+    .filter((s) => s.score >= RELEVANCE_FLOOR) // drop anything not actually related to THIS task
     .sort((a, b) => b.score - a.score)
     .slice(0, k);
   return { scored, mode: "semantic" };
