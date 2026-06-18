@@ -119,15 +119,41 @@ function readPage() {
     }
   };
   // 1) Controls inside an OPEN overlay (dialog/menu/flyout/listbox) go FIRST — so when a click opens
-  //    the Settings panel or a rule dialog, its controls lead the list instead of being pushed past
-  //    the cap by the persistent toolbar/nav. (This is what made menu navigation loop forever.)
+  //    a confirmation dialog (e.g. Gmail's "Unsubscribe?") or a Settings panel, its controls LEAD the
+  //    list instead of being pushed past the cap by the persistent toolbar/nav (what made it loop).
   const overlays = [];
+  const overlayRoots = [];
   try {
+    // ARIA modals + menus. alertdialog matters: Gmail/Material CONFIRM dialogs use role="alertdialog".
     for (const o of document.querySelectorAll(
-      '[role=dialog], [aria-modal="true"], [role=menu], [role=listbox], [role=menubar], [role=tablist]',
+      '[role=dialog], [role=alertdialog], [aria-modal="true"], [role=menu], [role=listbox], [role=menubar], [role=tablist]',
     )) {
-      if (isVisible(o)) collect(o, overlays, CAP);
+      if (isVisible(o)) overlayRoots.push(o);
     }
+    // Fallback for a role-less modal: the top-most visible fixed/positioned box that holds buttons.
+    // Only runs when no ARIA modal was found (so it's cheap on the common path), and is bounded.
+    if (!overlayRoots.some((o) => /dialog/.test(o.getAttribute("role") || "") || o.getAttribute("aria-modal") === "true")) {
+      let best = null;
+      let bestZ = 0;
+      let scanned = 0;
+      for (const el of document.querySelectorAll("div, section, form")) {
+        if (++scanned > 4000) break; // bound the worst case on huge pages
+        if (!isVisible(el)) continue;
+        const cs = getComputedStyle(el);
+        if (cs.position !== "fixed" && cs.position !== "absolute") continue;
+        const z = parseInt(cs.zIndex, 10) || 0;
+        if (z < 1) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width < 200 || r.height < 80) continue; // skip tiny toasts/badges
+        if (!el.querySelector("button, [role=button]")) continue; // a real action surface
+        if (z >= bestZ) {
+          bestZ = z;
+          best = el;
+        }
+      }
+      if (best) overlayRoots.unshift(best);
+    }
+    for (const o of overlayRoots) collect(o, overlays, CAP);
   } catch {}
   // 2) Then the rest of the page (shadow-pierced, deduped against the overlays via `seen`).
   const rest = [];
