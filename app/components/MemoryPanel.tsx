@@ -22,6 +22,8 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
   const [savingModel, setSavingModel] = useState(false);
   const [endpoint, setEndpoint] = useState("openrouter");
   const [endpoints, setEndpoints] = useState<{ key: string; label: string; note: string }[]>([]);
+  const [vision, setVision] = useState(true);
+  const [modelCanSee, setModelCanSee] = useState(false);
   const [ollamaUrl, setOllamaUrl] = useState("");
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [savingUrl, setSavingUrl] = useState(false);
@@ -82,6 +84,8 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
         setEndpoints(d.endpoints ?? []);
         setOllamaUrl(d.ollamaBaseUrl ?? "");
         setOllamaModels(d.ollamaModels ?? []);
+        setVision(d.vision !== false);
+        setModelCanSee(!!d.modelCanSee);
       })
       .catch(() => {});
   };
@@ -127,6 +131,16 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
   const resetOllamaUrl = () => {
     setOllamaUrl("http://localhost:11434/v1");
     saveOllamaUrl("http://localhost:11434/v1");
+  };
+
+  // "Eyes": let Errand see page screenshots on web tasks (only does anything on a vision model).
+  const toggleVision = async (next: boolean) => {
+    setVision(next);
+    await fetch("/api/model", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ vision: next }),
+    }).catch(() => {});
   };
 
   // Connected tools (MCP): add / remove / toggle a server. Every change re-reads the live status.
@@ -403,6 +417,31 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
                 <p className="text-xs text-stone-400">
                   Now using <span className="font-mono text-[11px] text-stone-600">{model || "…"}</span>
                 </p>
+              </div>
+
+              {/* "Eyes" — feed page screenshots to the model on web tasks (needs a vision model) */}
+              <div className="mt-4 flex items-center justify-between gap-4 border-t border-stone-100 pt-3">
+                <div className="min-w-0">
+                  <p className="text-[13px] font-medium text-stone-800">Let Errand see the screen</p>
+                  <p className="text-[12px] leading-snug text-stone-500">
+                    Show the page to the model as a picture on web tasks, so it can navigate by sight.{" "}
+                    {vision &&
+                      (modelCanSee ? (
+                        <span className="text-emerald-600">This model can see.</span>
+                      ) : (
+                        <span className="text-amber-600">This model is text-only — pick a vision model above (e.g. Gemini 2.5 Flash).</span>
+                      ))}
+                  </p>
+                </div>
+                <button
+                  onClick={() => toggleVision(!vision)}
+                  role="switch"
+                  aria-checked={vision}
+                  aria-label="Let Errand see the screen"
+                  className={`relative h-6 w-11 shrink-0 rounded-full transition ${vision ? "bg-accent-600" : "bg-stone-200"}`}
+                >
+                  <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${vision ? "left-[1.375rem]" : "left-0.5"}`} />
+                </button>
               </div>
             </div>
 

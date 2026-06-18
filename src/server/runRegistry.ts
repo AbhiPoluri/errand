@@ -8,7 +8,7 @@ import { Logger } from "../log.ts";
 import { Registry } from "../tools/index.ts";
 import { buildRegistryFor, enabledPacks } from "../capabilities/index.ts";
 import { makeClient } from "../client.ts";
-import { ENDPOINTS, DEFAULT_OLLAMA_BASE_URL, normalizeOllamaBaseUrl } from "../models.ts";
+import { ENDPOINTS, DEFAULT_OLLAMA_BASE_URL, normalizeOllamaBaseUrl, modelSupportsVision } from "../models.ts";
 import { AgentRunner } from "../loop.ts";
 import { type ApprovalGate, type ApprovalRequest, type Decision } from "../approvals.ts";
 import { SYSTEM_PROMPT } from "../prompt.ts";
@@ -131,6 +131,13 @@ function buildRegistry(): Registry {
 // default. Read per-run so switching the model takes effect on the next run, no restart.
 function currentModel(): string {
   return store.getSetting("model", config.model);
+}
+
+// Whether to feed page screenshots to the model on browser tasks ("eyes"): on unless the user turned
+// it off in Settings AND only when the selected model can actually read images (else it's wasted /
+// errors). Read per-run so a model/toggle change takes effect next run.
+function currentVision(): boolean {
+  return store.getSetting("vision", "on") !== "off" && modelSupportsVision(currentModel());
 }
 
 // The endpoint (cloud OpenRouter or local/LAN Ollama) new runs use, from Settings. For Ollama we
@@ -281,6 +288,7 @@ export async function startRun(message: string, roots?: string[]): Promise<strin
     model: currentModel(),
     client: currentClient(),
     stream: currentEndpoint().stream,
+    vision: currentVision(),
     logger: new Logger(runId),
     runId,
     gate: new WebGate(entry),
@@ -326,6 +334,7 @@ function rehydrate(runId: string): RunEntry | undefined {
     model: currentModel(),
     client: currentClient(),
     stream: currentEndpoint().stream,
+    vision: currentVision(),
     logger: new Logger(runId),
     runId,
     gate: new WebGate(entry),

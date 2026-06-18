@@ -19,6 +19,25 @@ export class Session {
     this.messages.push({ role: "user", content });
   }
 
+  // Give the model EYES: append the page screenshot as an image the model can actually look at
+  // (used after browser actions when a vision-capable model is selected). To control cost + context,
+  // only the LATEST screenshot is kept — any earlier image message is collapsed to a text placeholder
+  // (the model has its text observations for history; stale pixels aren't worth the tokens).
+  pushUserImage(text: string, imageDataUrl: string): void {
+    for (const m of this.messages) {
+      if (m.role === "user" && Array.isArray(m.content) && m.content.some((p) => p.type === "image_url")) {
+        (m as { content: unknown }).content = "(an earlier screenshot — see the latest one below)";
+      }
+    }
+    this.messages.push({
+      role: "user",
+      content: [
+        { type: "text", text },
+        { type: "image_url", image_url: { url: imageDataUrl } },
+      ],
+    });
+  }
+
   // The assistant message from a completion (content may be null when only tool_calls).
   pushAssistant(message: Message): void {
     this.messages.push(message);

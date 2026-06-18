@@ -3,7 +3,7 @@
 // accepted; presets are the easy path. The OpenRouter API key never leaves the server.
 import { NextRequest, NextResponse } from "next/server";
 import { config } from "../../../src/config.ts";
-import { MODEL_PRESETS, ENDPOINTS, listOllamaModels, normalizeOllamaBaseUrl, DEFAULT_OLLAMA_BASE_URL } from "../../../src/models.ts";
+import { MODEL_PRESETS, ENDPOINTS, listOllamaModels, normalizeOllamaBaseUrl, DEFAULT_OLLAMA_BASE_URL, modelSupportsVision } from "../../../src/models.ts";
 import { getSetting, setSetting } from "../../../src/server/store.ts";
 
 export const runtime = "nodejs";
@@ -16,8 +16,9 @@ function ollamaBaseUrl(): string {
 
 export async function GET() {
   const ollamaUrl = ollamaBaseUrl();
+  const current = getSetting("model", config.model);
   return NextResponse.json({
-    current: getSetting("model", config.model),
+    current,
     default: config.model,
     presets: MODEL_PRESETS,
     endpoint: getSetting("endpoint", "openrouter"),
@@ -25,6 +26,9 @@ export async function GET() {
     ollamaBaseUrl: ollamaUrl,
     // Models available at the configured Ollama server (local or LAN); fail-soft [] if it's unreachable.
     ollamaModels: await listOllamaModels(1500, ollamaUrl),
+    // "Eyes": whether screenshots are fed to the model on web tasks, and whether the current model can see them.
+    vision: getSetting("vision", "on") !== "off",
+    modelCanSee: modelSupportsVision(current),
   });
 }
 
@@ -52,10 +56,16 @@ export async function POST(req: NextRequest) {
     }
     setSetting("ollamaBaseUrl", norm);
   }
+  if (typeof body?.vision === "boolean") {
+    setSetting("vision", body.vision ? "on" : "off");
+  }
+  const current = getSetting("model", config.model);
   return NextResponse.json({
     ok: true,
-    current: getSetting("model", config.model),
+    current,
     endpoint: getSetting("endpoint", "openrouter"),
     ollamaBaseUrl: ollamaBaseUrl(),
+    vision: getSetting("vision", "on") !== "off",
+    modelCanSee: modelSupportsVision(current),
   });
 }

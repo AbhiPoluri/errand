@@ -44,6 +44,7 @@ export interface RunnerOpts {
   startSeq?: number; // resume seq after rehydrating a persisted run (avoids seq collisions)
   client?: OpenAI; // which OpenAI-compatible endpoint (default: the OpenRouter singleton)
   stream?: boolean; // small local models do tool-calling better non-streamed (default: true)
+  vision?: boolean; // feed page screenshots to the model after browser actions (needs a vision model)
 }
 
 export class AgentRunner {
@@ -57,6 +58,7 @@ export class AgentRunner {
 
   private readonly client: OpenAI;
   private readonly stream: boolean;
+  private readonly vision: boolean;
 
   constructor(private o: RunnerOpts) {
     this.runId = o.runId ?? crypto.randomUUID();
@@ -67,6 +69,7 @@ export class AgentRunner {
     this.started = (o.startSeq ?? 0) > 0; // a rehydrated run already emitted run.started
     this.client = o.client ?? defaultClient;
     this.stream = o.stream ?? true;
+    this.vision = o.vision ?? false;
   }
 
   private async emit(body: AgentEventBody): Promise<void> {
@@ -291,6 +294,9 @@ export class AgentRunner {
       // Sequential tool execution. EVERY call MUST get a tool result appended (ordering
       // invariant) — the `finally` backfills any call left unresolved (cancel, throw,
       // a denied gate) so session.messages never strands a tool_call and 400s next turn.
+      // The most recent screenshot a tool streamed THIS step — fed to a vision model so it can see
+      // the page (set in onScreenshot, consumed + cleared after each tool result).
+      let lastShot: string | null = null;
       const ctx: ToolContext = {
         signal,
         journal: this.o.session.journal,
@@ -298,6 +304,7 @@ export class AgentRunner {
         workspaceRoot: this.workspaceRoot,
         roots: this.roots,
         onScreenshot: (dataUrl) => {
+          lastShot = dataUrl;
           void this.emit({ type: "screenshot", dataUrl });
         },
       };
@@ -460,6 +467,17 @@ export class AgentRunner {
             pushResult(call.id, toToolMessage({ ok: false, error: "unresolved" }));
           }
         }
+      }
+
+      // Give the model EYES: once ALL of this turn's tool results are in (so the assistant→tool
+      // ordering invariant holds), hand a vision model ONE image of the page — the most recent
+      // browser screenshot this turn — so its next decision is informed by what it can actually SEE,
+      // not just the text element-list. The session prunes older screenshots to a placeholder.
+      if (this.vision && lastShot && !cancelled) {
+        this.o.session.pushUserImage(
+          "This is what the page looks like now. Use it together with the numbered elements above to choose your next step.",
+          lastShot,
+        );
       }
 
       if (cancelled) {

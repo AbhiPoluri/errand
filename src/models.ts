@@ -5,6 +5,7 @@ export interface ModelPreset {
   id: string;
   label: string;
   note: string;
+  vision?: boolean; // can SEE images — required for screenshot-driven ("eyes") browsing
 }
 
 // Where the agent's chat completions go. Any OpenAI-compatible endpoint works. Local models
@@ -102,8 +103,17 @@ export async function listOllamaModels(timeoutMs = 1000, baseURL?: string): Prom
 }
 
 export const MODEL_PRESETS: ModelPreset[] = [
-  { id: "deepseek/deepseek-v4-flash:nitro", label: "DeepSeek V4 Flash", note: "Fast and low-cost — the default" },
-  { id: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash", note: "Fast, capable" },
-  { id: "openai/gpt-4.1-mini", label: "GPT-4.1 mini", note: "Balanced" },
-  { id: "anthropic/claude-opus-4.8", label: "Claude Opus 4.8", note: "Best quality — slower, pricier" },
+  { id: "deepseek/deepseek-v4-flash:nitro", label: "DeepSeek V4 Flash", note: "Fast and low-cost — the default (text only)" },
+  { id: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash", note: "Fast, capable, can see the screen", vision: true },
+  { id: "openai/gpt-4.1-mini", label: "GPT-4.1 mini", note: "Balanced, can see the screen", vision: true },
+  { id: "anthropic/claude-opus-4.8", label: "Claude Opus 4.8", note: "Best quality, can see the screen", vision: true },
 ];
+
+// Does this model accept image input (so "give it eyes" browsing works)? Known presets carry the
+// flag; for any other id (custom OpenRouter ids, Ollama tags) fall back to a name heuristic for the
+// common vision families. Conservative: unknown → false (we never send images a model can't read).
+export function modelSupportsVision(id: string): boolean {
+  const preset = MODEL_PRESETS.find((p) => p.id === id);
+  if (preset) return !!preset.vision;
+  return /gemini|gpt-4|gpt-5|claude|llava|llama-?3\.2-vision|-vl\b|vision|pixtral|qwen2?\.?5?-vl/i.test(id);
+}
