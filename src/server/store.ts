@@ -81,6 +81,15 @@ db.exec(`
   }
 }
 
+// Expression indexes for the case-insensitive dedup lookups. addMemory/addSuggestion both do
+// `WHERE lower(text) = lower(?)`, which can't use a plain text index — so every insert was an
+// O(N) full scan, and dreaming inserts in bulk over a monotonically growing store. SQLite
+// supports indexes on expressions; these make the dedup probe an index seek.
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_memories_lower_text ON memories(lower(text));
+  CREATE INDEX IF NOT EXISTS idx_suggestions_lower_text ON suggestions(lower(text));
+`);
+
 const stmtCreate = db.prepare(
   `INSERT OR IGNORE INTO runs (runId, title, createdAt, status, roots, updatedAt) VALUES (?, ?, ?, 'working', ?, ?)`,
 );

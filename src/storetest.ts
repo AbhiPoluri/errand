@@ -75,6 +75,17 @@ function testSettings() {
   check("INSERT OR REPLACE overwrites", store.getSetting("k") === "v2");
 }
 
+function testDedupIndexes() {
+  console.log("\n== dedup lookups use an index (not a full scan) ==");
+  const raw = new DatabaseSync(dbPath);
+  const plan = (sql: string) => (raw.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as any[]).map((r) => r.detail).join(" | ");
+  const memPlan = plan("SELECT id FROM memories WHERE lower(text) = lower('x')");
+  const sugPlan = plan("SELECT id FROM suggestions WHERE lower(text) = lower('x')");
+  raw.close();
+  check("memories dedup uses an index", /USING INDEX/i.test(memPlan), memPlan);
+  check("suggestions dedup uses an index", /USING INDEX/i.test(sugPlan), sugPlan);
+}
+
 function testRecentConversationsSkipsMalformed() {
   console.log("\n== recentConversations skips a malformed messages row (no throw) ==");
   store.createRun("badrun", "Bad", 2, ["/tmp"]);
@@ -93,6 +104,7 @@ async function main() {
   await testMemories();
   await testSuggestions();
   testSettings();
+  testDedupIndexes();
   testRecentConversationsSkipsMalformed();
   _setEmbedClient(null);
   console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILED"}`);

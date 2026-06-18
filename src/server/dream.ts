@@ -93,11 +93,17 @@ export async function dream(): Promise<{ added: number; merged: number; removed:
   }
 
   // New durable facts (addMemory still skips exact duplicates).
+  // Track known ids once (memList is already in scope) instead of re-scanning the whole memory
+  // store twice per new fact: addMemory returns '' on blank, the existing id on an exact dup, or a
+  // fresh id otherwise — so a non-empty, not-yet-seen id means a genuinely new row.
   let added = 0;
+  const known = new Set(memList.map((m) => m.id));
   for (const m of newMemories) {
-    const before = store.listMemories().length;
-    await store.addMemory(m.text, m.kind ?? "fact", "dream");
-    if (store.listMemories().length > before) added++; // addMemory no-ops on blank/exact-dup
+    const id = await store.addMemory(m.text, m.kind ?? "fact", "dream");
+    if (id && !known.has(id)) {
+      added++;
+      known.add(id);
+    }
   }
 
   let suggested = 0;
