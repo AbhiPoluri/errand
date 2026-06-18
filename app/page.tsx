@@ -63,8 +63,33 @@ export default function Page() {
   const [uploadErr, setUploadErr] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState(false);
 
   const idle = run.state.phase === "idle";
+
+  const toggleSelect = (id: string) =>
+    setSelected((s) => {
+      const n = new Set(s);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+
+  // Permanently remove one or more past conversations from Recently (optimistic).
+  const deleteRuns = async (ids: string[]) => {
+    if (!ids.length) return;
+    setDeleting(true);
+    setRecent((rs) => rs.filter((r) => !ids.includes(r.runId)));
+    setSelected(new Set());
+    await fetch("/api/runs", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    }).catch(() => {});
+    setDeleting(false);
+  };
 
   // Attach a file for Errand to read: upload into its safe folder, scope there, and prefill a
   // ready prompt so the file just gets read on submit.
@@ -157,6 +182,8 @@ export default function Page() {
   // Refresh the Recently list + dreaming's suggestions whenever we land back on Home.
   useEffect(() => {
     if (!idle) return;
+    setSelectMode(false);
+    setSelected(new Set());
     fetch("/api/runs")
       .then((r) => r.json())
       .then((d) => setRecent(d.runs ?? []))
@@ -517,31 +544,102 @@ export default function Page() {
           </details>
         </motion.div>
 
-        {/* Recently — revisit a past errand (reopens its full record) */}
+        {/* Recently — revisit a past errand (reopens its full record), or clear ones you don't need */}
         {recent.length > 0 && (
           <motion.div variants={item} className="mt-10 border-t border-stone-200/70 pt-6">
-            <p className="text-[13px] font-medium text-stone-400">Recently</p>
-            <ul className="mt-1.5">
-              {recent.map((r) => (
-                <li key={r.runId}>
+            <div className="flex h-5 items-center justify-between">
+              <p className="text-[13px] font-medium text-stone-400">Recently</p>
+              {selectMode ? (
+                <div className="flex items-center gap-3">
+                  {selected.size > 0 && (
+                    <button
+                      onClick={() => deleteRuns([...selected])}
+                      disabled={deleting}
+                      className="text-[13px] font-medium text-brick-600 transition hover:text-brick-700 disabled:opacity-50"
+                    >
+                      Delete {selected.size}
+                    </button>
+                  )}
                   <button
-                    onClick={() => run.open(r.runId)}
-                    className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition hover:bg-white active:scale-[0.99]"
+                    onClick={() => {
+                      setSelectMode(false);
+                      setSelected(new Set());
+                    }}
+                    className="text-[13px] font-medium text-stone-500 transition hover:text-stone-800"
                   >
-                    <span
-                      className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                        r.status === "working" ? "bg-accent-600" : r.status === "done" ? "bg-forest-600" : "bg-stone-300"
-                      }`}
-                    />
-                    <span className="min-w-0 flex-1 truncate text-sm text-stone-700 transition group-hover:text-stone-900">
-                      {r.title}
-                    </span>
-                    <span className="shrink-0 font-mono text-[11px] uppercase tracking-wide text-stone-400">
-                      {relativeTime(r.createdAt)}
-                    </span>
+                    Done
                   </button>
-                </li>
-              ))}
+                </div>
+              ) : (
+                <button
+                  onClick={() => setSelectMode(true)}
+                  className="text-[13px] font-medium text-stone-400 transition hover:text-stone-700"
+                >
+                  Select
+                </button>
+              )}
+            </div>
+            <ul className="mt-1.5">
+              {recent.map((r) => {
+                const isSel = selected.has(r.runId);
+                return (
+                  <li key={r.runId}>
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => (selectMode ? toggleSelect(r.runId) : run.open(r.runId))}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          selectMode ? toggleSelect(r.runId) : run.open(r.runId);
+                        }
+                      }}
+                      className={`group flex w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5 text-left transition hover:bg-white active:scale-[0.99] ${
+                        isSel ? "bg-white" : ""
+                      }`}
+                    >
+                      {selectMode && (
+                        <span
+                          className={`grid h-4 w-4 shrink-0 place-items-center rounded-[5px] border transition ${
+                            isSel ? "border-accent-600 bg-accent-600 text-white" : "border-stone-300 bg-white"
+                          }`}
+                        >
+                          {isSel && (
+                            <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden>
+                              <path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                          )}
+                        </span>
+                      )}
+                      <span
+                        className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                          r.status === "working" ? "bg-accent-600" : r.status === "done" ? "bg-forest-600" : "bg-stone-300"
+                        }`}
+                      />
+                      <span className="min-w-0 flex-1 truncate text-sm text-stone-700 transition group-hover:text-stone-900">
+                        {r.title}
+                      </span>
+                      <span className="shrink-0 font-mono text-[11px] uppercase tracking-wide text-stone-400">
+                        {relativeTime(r.createdAt)}
+                      </span>
+                      {!selectMode && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deleteRuns([r.runId]);
+                          }}
+                          aria-label="Delete this conversation"
+                          className="shrink-0 text-stone-300 opacity-0 transition group-hover:opacity-100 hover:text-brick-600"
+                        >
+                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden>
+                            <path d="M5 7h14M10 4h4M6 7l1 13h10l1-13M10 11v5M14 11v5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           </motion.div>
         )}

@@ -102,6 +102,12 @@ export function getEvents(runId: string): AgentEvent[] {
   return (stmtEvents.all(runId) as any[]).map((r) => JSON.parse(r.payload) as AgentEvent);
 }
 
+// Permanently remove a run and its full event stream (user clears it from Recently).
+export function deleteRun(runId: string): void {
+  db.prepare("DELETE FROM events WHERE runId = ?").run(runId);
+  db.prepare("DELETE FROM runs WHERE runId = ?").run(runId);
+}
+
 export function getStoredRun(
   runId: string,
 ): { runId: string; title: string; createdAt: number; roots: string[]; messages: any[] } | null {

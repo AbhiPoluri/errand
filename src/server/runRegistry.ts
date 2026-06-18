@@ -38,6 +38,7 @@ interface RunEntry {
   autoApproveReversible: boolean; // "Yes to all (this errand)" — REVERSIBLE actions only
   title: string; // first message, for the Recently list
   createdAt: number;
+  deleted?: boolean; // user removed it mid-run — stop persisting its in-flight events
 }
 
 export interface RunSummary {
@@ -109,6 +110,7 @@ async function buildSystemPrompt(query: string): Promise<string> {
 // streams them within the session, and message.completed reconstructs the final text on replay.
 function attachPersistence(entry: RunEntry): void {
   entry.sink.subscribe((e) => {
+    if (entry.deleted) return; // deleted mid-run — don't re-add its in-flight events to the DB
     if (e.type !== "message.delta" && e.type !== "thinking.delta") store.appendEvent(entry.runId, e);
     if (e.type === "run.finished") {
       store.setStatus(entry.runId, "done");
@@ -249,6 +251,17 @@ export function cancelRun(runId: string): boolean {
   if (!entry) return false;
   entry.abort.abort();
   return true;
+}
+
+// Permanently delete a run: stop it if live, drop it from memory, and remove it from the DB.
+export function removeRun(runId: string): void {
+  const entry = runs.get(runId);
+  if (entry) {
+    entry.deleted = true; // BEFORE abort, so its unwind events aren't re-persisted
+    entry.abort.abort(); // stop it if it's mid-task
+    runs.delete(runId);
+  }
+  store.deleteRun(runId);
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

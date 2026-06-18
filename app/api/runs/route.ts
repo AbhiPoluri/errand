@@ -1,7 +1,7 @@
 // POST /api/runs — start a new run. Returns { runId }. The run executes server-side
 // (real fs + child_process); the browser watches it via the SSE stream.
 import { NextRequest, NextResponse } from "next/server";
-import { startRun, listRuns } from "../../../src/server/runRegistry.ts";
+import { startRun, listRuns, removeRun } from "../../../src/server/runRegistry.ts";
 import { checkRoots } from "../../../src/server/folders.ts";
 
 export const runtime = "nodejs"; // NOT edge — tools need fs/child_process; key stays server-side
@@ -24,4 +24,13 @@ export async function POST(req: NextRequest) {
   }
   const runId = await startRun(message, roots);
   return NextResponse.json({ runId });
+}
+
+// DELETE /api/runs — remove one or more conversations. Body: { ids: string[] }.
+export async function DELETE(req: NextRequest) {
+  const body = await req.json().catch(() => ({}));
+  const ids = Array.isArray(body?.ids) ? body.ids.filter((x: unknown) => typeof x === "string") : [];
+  if (!ids.length) return NextResponse.json({ error: "no ids" }, { status: 400 });
+  for (const id of ids) removeRun(id);
+  return NextResponse.json({ ok: true, deleted: ids.length });
 }
