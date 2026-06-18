@@ -82,8 +82,15 @@ const runs: Map<string, RunEntry> = (g.__errandRuns ??= new Map());
 // so an HMR edge can never mark a genuinely-live run as interrupted.
 if (!g.__errandReconciled) {
   g.__errandReconciled = true;
-  const n = store.reconcileOrphans(new Set(runs.keys()));
-  if (n) console.log(`[errand] reconciled ${n} interrupted run(s) from a previous session`);
+  // This runs at module-init time, before any route can serve — so a throw here would brick
+  // EVERY /api/runs/* route at boot. Guard it: a reconcile failure must degrade to "didn't
+  // tidy up the zombies", never "the server won't start".
+  try {
+    const n = store.reconcileOrphans(new Set(runs.keys()));
+    if (n) console.log(`[errand] reconciled ${n} interrupted run(s) from a previous session`);
+  } catch (e) {
+    console.warn("[errand] orphan reconciliation failed (continuing):", e);
+  }
 }
 
 function buildRegistry(): Registry {

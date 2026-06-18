@@ -12,6 +12,19 @@ import { embed, embedMany, cosineSimilarity } from "./embed.ts";
 const g = globalThis as unknown as { __errandDb?: DatabaseSync };
 const db = (g.__errandDb ??= new DatabaseSync(process.env.ERRAND_DB ?? join(process.cwd(), "errand.db")));
 
+// Hot-path durability tuning. The agent fires an appendEvent per non-delta event, and the
+// default rollback journal + synchronous=FULL forces a full fsync on each one. WAL collapses
+// those into far fewer fsyncs and lets the SSE reader run concurrently with writes;
+// synchronous=NORMAL is the safe WAL companion; busy_timeout avoids SQLITE_BUSY when a second
+// tab reads while a run writes. Set every process (busy_timeout is per-connection; WAL persists).
+try {
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA synchronous = NORMAL");
+  db.exec("PRAGMA busy_timeout = 3000");
+} catch {
+  // A read-only or unusual filesystem may reject WAL; the default journal still works.
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS runs (
     runId TEXT PRIMARY KEY,
@@ -98,8 +111,25 @@ export function listRunSummaries(): RunSummary[] {
   }));
 }
 
+// Parse persisted JSON without ever throwing: a single truncated/corrupt blob (a crash
+// mid-write, a disk glitch) must degrade gracefully, not take down a route or block boot.
+function safeParse<T>(s: unknown, fallback: T): T {
+  if (typeof s !== "string") return fallback;
+  try {
+    return JSON.parse(s) as T;
+  } catch {
+    return fallback;
+  }
+}
+
 export function getEvents(runId: string): AgentEvent[] {
-  return (stmtEvents.all(runId) as any[]).map((r) => JSON.parse(r.payload) as AgentEvent);
+  const out: AgentEvent[] = [];
+  for (const r of stmtEvents.all(runId) as any[]) {
+    const e = safeParse<AgentEvent | null>(r.payload, null);
+    if (e) out.push(e);
+    else console.warn(`[store] skipping unparseable event for run ${runId}`);
+  }
+  return out;
 }
 
 // Permanently remove a run and its full event stream (user clears it from Recently).
@@ -117,8 +147,8 @@ export function getStoredRun(
     runId: r.runId,
     title: r.title,
     createdAt: r.createdAt,
-    roots: JSON.parse(r.roots),
-    messages: JSON.parse(r.messages),
+    roots: safeParse<string[]>(r.roots, []),
+    messages: safeParse<any[]>(r.messages, []),
   };
 }
 
