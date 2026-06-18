@@ -122,7 +122,39 @@ export class AgentRunner {
             { ...baseArgs, stream: true, stream_options: { include_usage: true } },
             { signal },
           );
-          for await (const chunk of stream) {
+          // Consume with an idle watchdog: the SDK timeout only covers up to the FIRST byte, so a
+          // stream that connects then goes silent mid-token would otherwise block forever and leave
+          // the run stuck "working". Race each chunk against STREAM_IDLE_MS; on idle, tear down the
+          // request and throw into the catch below → a recoverable transport error, not a hang.
+          const idleMs = Number(process.env.STREAM_IDLE_MS) || 60_000;
+          const iter = (stream as any)[Symbol.asyncIterator]();
+          for (;;) {
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            let step: IteratorResult<any>;
+            try {
+              step = await Promise.race([
+                iter.next(),
+                new Promise<never>((_, rej) => {
+                  timer = setTimeout(() => rej(new Error("stream_idle")), idleMs);
+                }),
+              ]);
+            } catch (e) {
+              try {
+                (stream as any).controller?.abort?.();
+              } catch {
+                /* best effort */
+              }
+              try {
+                await iter.return?.();
+              } catch {
+                /* best effort */
+              }
+              throw e;
+            } finally {
+              clearTimeout(timer);
+            }
+            if (step.done) break;
+            const chunk = step.value;
             if (chunk.usage) usage = chunk.usage;
             const ch = chunk.choices?.[0];
             if (!ch) continue;

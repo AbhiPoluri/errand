@@ -72,6 +72,25 @@ function rawToolCallResp(name: string, rawArgs: string, callId: string) {
   };
 }
 
+// A streaming response: yields each scripted chunk, then (if stallAfter) never resolves again — to
+// model a stream that connects, sends a token, then goes idle mid-reply.
+function streamStub(chunks: any[], stallAfter = false) {
+  return {
+    [Symbol.asyncIterator]() {
+      let i = 0;
+      return {
+        next() {
+          if (i < chunks.length) return Promise.resolve({ done: false, value: chunks[i++] });
+          if (stallAfter) return new Promise<never>(() => {}); // never resolves → idle watchdog fires
+          return Promise.resolve({ done: true, value: undefined });
+        },
+        return: () => Promise.resolve({ done: true, value: undefined }),
+      };
+    },
+    controller: { abort() {} },
+  };
+}
+
 // Stub client: create() returns responder(callIndex). Ignores the request args entirely.
 function stubClient(responder: (i: number) => any): OpenAI {
   let i = 0;
@@ -231,8 +250,32 @@ async function testInvalidArgsStaysWellFormed() {
   check("run recovered and finished", tap.events.some((e) => e.type === "run.finished"));
 }
 
+async function testStreamIdleWatchdog() {
+  console.log("\n== 8. a stalled stream (idle mid-token) -> recoverable transport error, no hang ==");
+  const registry = new Registry().register(stubTool("do_thing", { result: { ok: true } }));
+  const runId = crypto.randomUUID();
+  const session = new Session(SYSTEM);
+  const tap = new Tap();
+  const stall = streamStub([{ choices: [{ delta: { content: "hi" } }] }], true);
+  const client = { chat: { completions: { create: async () => stall } } } as unknown as OpenAI;
+  const runner = new AgentRunner({ session, sink: tap, registry, model: "stub", logger: new Logger(runId), runId, client, stream: true });
+  const prev = process.env.STREAM_IDLE_MS;
+  process.env.STREAM_IDLE_MS = "40";
+  try {
+    await runner.send("stream then stall", new AbortController().signal);
+  } finally {
+    if (prev === undefined) delete process.env.STREAM_IDLE_MS;
+    else process.env.STREAM_IDLE_MS = prev;
+  }
+  const err = tap.events.find((e) => e.type === "run.error");
+  check("idle stream -> run.error kind=transport", err?.type === "run.error" && err.kind === "transport");
+  check("transport error is recoverable", err?.type === "run.error" && err.recoverable === true);
+  check("did NOT hang or report a finish", !tap.events.some((e) => e.type === "run.finished"));
+}
+
 async function main() {
   await testFailingActionAborts();
+  await testStreamIdleWatchdog();
   await testDistinctSuccessesDoNotAbort();
   await testIdenticalSuccessLoopAborts();
   await testDeniedApprovalsDoNotAbort();
