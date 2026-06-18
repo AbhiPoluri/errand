@@ -27,8 +27,28 @@ export function isExtConnected(): boolean {
   return !!stream.controller;
 }
 
+// Fail every in-flight command now (clearing its timer) with an honest reason, instead of letting
+// each wait out its 30s "took too long" timer when the real cause is a disconnect/reconnect.
+function failAllPending(error: string): void {
+  for (const p of pending.values()) {
+    clearTimeout(p.timer);
+    p.resolve({ ok: false, error });
+  }
+  pending.clear();
+}
+
 // Called by the SSE route when the extension connects / disconnects.
 export function registerStream(controller: Controller, id: string): void {
+  // A fresh connection supersedes any prior one: fail its in-flight commands and close the old
+  // controller so they don't hang waiting on a stream that's about to be replaced.
+  if (stream.controller && stream.id !== id) {
+    failAllPending("the browser reconnected");
+    try {
+      stream.controller.close();
+    } catch {
+      /* already closed */
+    }
+  }
   stream.controller = controller;
   stream.id = id;
 }
@@ -36,6 +56,9 @@ export function unregisterStream(id: string): void {
   if (stream.id === id) {
     stream.controller = undefined;
     stream.id = undefined;
+    // Resolve parked commands immediately with the true reason rather than the misleading
+    // "took too long" 30s later (tab close, Chrome suspend, laptop sleep are routine).
+    failAllPending("the browser disconnected");
   }
 }
 
