@@ -43,13 +43,14 @@ function binaryRefusal(): string {
   return "That file isn't text, so I can't read it.";
 }
 
-function fail(e: unknown): ToolResult {
+// Returns ToolResult<never> (it never sets `data`), so it's assignable to any tool's ToolResult<D>.
+function fail(e: unknown): ToolResult<never> {
   if (e instanceof PathError) return { ok: false, error: "path", summary: e.userSummary };
   return { ok: false, error: String((e as any)?.message ?? e) };
 }
 
 // ---- list_files (read-only) ----
-export const listFiles: Tool<{ dir?: string }> = {
+export const listFiles: Tool<{ dir?: string }, { name: string; kind: string; size: number }[]> = {
   name: "list_files",
   modelDescription: "List the files and folders inside a directory. Read-only.",
   jsonSchema: {
@@ -60,7 +61,7 @@ export const listFiles: Tool<{ dir?: string }> = {
   argsSchema: z.object({ dir: z.string().optional() }),
   gated: false,
   describe: (a) => ({ action: `Looking at what's in ${a.dir ? name(a.dir) : "the folder"}`, reversibility: "reversible" }),
-  summarize: (r) => (r.ok ? `Found ${(r.data as any[])?.length ?? 0} item(s).` : "I couldn't open that folder."),
+  summarize: (r) => (r.ok ? `Found ${r.data?.length ?? 0} item(s).` : "I couldn't open that folder."),
   run: async (a, ctx) => {
     try {
       const abs = resolveWithin(ctx.roots, a.dir ?? ".");
@@ -81,7 +82,10 @@ export const listFiles: Tool<{ dir?: string }> = {
 };
 
 // ---- read_file (read-only) ----
-export const readFile: Tool<{ path: string }> = {
+export const readFile: Tool<
+  { path: string },
+  { path: string; text: string; truncated: boolean; kind?: string; pages?: number }
+> = {
   name: "read_file",
   modelDescription:
     "Read the text of a file — plain text, code, CSV, Markdown, a PDF, a Word (.docx) document, or an Excel (.xlsx) spreadsheet. Read-only; PDFs, Word docs, and spreadsheets are converted to text automatically. It can also pull text out of an image or photo (a screenshot, a scan, a picture of a page) via OCR. Other non-text files can't be read.",
@@ -96,9 +100,8 @@ export const readFile: Tool<{ path: string }> = {
   describe: (a) => ({ action: `Reading ${name(a.path)}`, reversibility: "reversible" }),
   summarize: (r) => {
     if (!r.ok) return r.summary ?? "I couldn't read that file.";
-    const d = r.data as any;
-    const where = name(d?.path ?? "the file");
-    return d?.pages ? `Read ${where} (${d.pages} page${d.pages === 1 ? "" : "s"}).` : `Read ${where}.`;
+    const where = name(r.data?.path ?? "the file");
+    return r.data?.pages ? `Read ${where} (${r.data.pages} page${r.data.pages === 1 ? "" : "s"}).` : `Read ${where}.`;
   },
   run: async (a, ctx) => {
     try {
@@ -148,7 +151,7 @@ export const readFile: Tool<{ path: string }> = {
 };
 
 // ---- write_file (gated, reversible) ----
-export const writeFile: Tool<{ path: string; content: string }> = {
+export const writeFile: Tool<{ path: string; content: string }, { path: string }> = {
   name: "write_file",
   modelDescription: "Create or overwrite a text file with the given content.",
   jsonSchema: {
@@ -177,7 +180,7 @@ export const writeFile: Tool<{ path: string; content: string }> = {
       reversibility: "reversible",
     };
   },
-  summarize: (r) => (r.ok ? `Saved ${name((r.data as any)?.path ?? "the file")}.` : (r.summary ?? "I couldn't save that file.")),
+  summarize: (r) => (r.ok ? `Saved ${name(r.data?.path ?? "the file")}.` : (r.summary ?? "I couldn't save that file.")),
   run: async (a, ctx) => {
     try {
       const abs = resolveWithin(ctx.roots, a.path);
@@ -220,7 +223,7 @@ export const writeFile: Tool<{ path: string; content: string }> = {
 // ---- make_folder (gated, reversible) — the structured way to create a folder, so
 // the model never reaches for bash `mkdir`. Inverse removes the folder only if it's
 // still empty (never deletes a folder the user later filled). ----
-export const makeFolder: Tool<{ path: string }> = {
+export const makeFolder: Tool<{ path: string }, { path: string }> = {
   name: "make_folder",
   modelDescription: "Create a new, empty folder. Use this instead of a shell command to make folders.",
   jsonSchema: {
@@ -237,7 +240,7 @@ export const makeFolder: Tool<{ path: string }> = {
     consequences: "You can undo this.",
     reversibility: "reversible",
   }),
-  summarize: (r) => (r.ok ? `Made the folder ${name((r.data as any)?.path ?? "")}.` : (r.summary ?? "I couldn't make that folder.")),
+  summarize: (r) => (r.ok ? `Made the folder ${name(r.data?.path ?? "")}.` : (r.summary ?? "I couldn't make that folder.")),
   run: async (a, ctx) => {
     try {
       const abs = resolveWithin(ctx.roots, a.path);
@@ -264,7 +267,7 @@ export const makeFolder: Tool<{ path: string }> = {
 };
 
 // ---- move (gated, reversible) ----
-export const moveFile: Tool<{ from: string; to: string }> = {
+export const moveFile: Tool<{ from: string; to: string }, { from: string; to: string }> = {
   name: "move_file",
   modelDescription: "Move or rename a file or folder. Refuses if the destination already exists.",
   jsonSchema: {
@@ -284,7 +287,7 @@ export const moveFile: Tool<{ from: string; to: string }> = {
     consequences: "You can undo this.",
     reversibility: "reversible",
   }),
-  summarize: (r) => (r.ok ? `Moved ${name((r.data as any)?.from ?? "it")}.` : (r.summary ?? "I couldn't move that.")),
+  summarize: (r) => (r.ok ? `Moved ${name(r.data?.from ?? "it")}.` : (r.summary ?? "I couldn't move that.")),
   run: async (a, ctx) => {
     try {
       const from = resolveWithin(ctx.roots, a.from);
@@ -309,7 +312,7 @@ export const moveFile: Tool<{ from: string; to: string }> = {
 };
 
 // ---- copy (gated, reversible) ----
-export const copyFile: Tool<{ from: string; to: string }> = {
+export const copyFile: Tool<{ from: string; to: string }, { from: string; to: string }> = {
   name: "copy_file",
   modelDescription: "Copy a file or folder to a new location. Refuses if the destination already exists.",
   jsonSchema: {
@@ -329,7 +332,7 @@ export const copyFile: Tool<{ from: string; to: string }> = {
     consequences: "You can undo this.",
     reversibility: "reversible",
   }),
-  summarize: (r) => (r.ok ? `Copied ${name((r.data as any)?.from ?? "it")}.` : (r.summary ?? "I couldn't copy that.")),
+  summarize: (r) => (r.ok ? `Copied ${name(r.data?.from ?? "it")}.` : (r.summary ?? "I couldn't copy that.")),
   run: async (a, ctx) => {
     try {
       const from = resolveWithin(ctx.roots, a.from);
@@ -354,7 +357,7 @@ export const copyFile: Tool<{ from: string; to: string }> = {
 };
 
 // ---- delete (gated, reversible via Review folder — NEVER unlink) ----
-export const deleteFile: Tool<{ path: string }> = {
+export const deleteFile: Tool<{ path: string }, { original: string; review: string }> = {
   name: "delete_file",
   modelDescription:
     "Remove a file or folder. It is moved to a Review folder (recoverable), never permanently deleted.",
@@ -373,7 +376,7 @@ export const deleteFile: Tool<{ path: string }> = {
     reversibility: "reversible",
   }),
   summarize: (r) =>
-    r.ok ? `Moved ${name((r.data as any)?.original ?? "it")} to a Review folder.` : (r.summary ?? "I couldn't remove that."),
+    r.ok ? `Moved ${name(r.data?.original ?? "it")} to a Review folder.` : (r.summary ?? "I couldn't remove that."),
   run: async (a, ctx) => {
     try {
       const abs = resolveWithin(ctx.roots, a.path);
@@ -405,7 +408,7 @@ export const deleteFile: Tool<{ path: string }> = {
 // ---- rename_file (gated, reversible) — rename in place within the same folder ----
 // Distinct from move_file: non-technical users say "rename", and a bare-basename rename can't
 // relocate or escape scope, so it reads honestly in the timeline ("Rename X to Y", not "Move").
-export const renameFile: Tool<{ path: string; newName: string }> = {
+export const renameFile: Tool<{ path: string; newName: string }, { from: string; to: string }> = {
   name: "rename_file",
   modelDescription:
     "Rename a file or folder in place (it stays in the same folder). Give just the new name, not a path.",
@@ -437,7 +440,7 @@ export const renameFile: Tool<{ path: string; newName: string }> = {
     consequences: "You can undo this.",
     reversibility: "reversible",
   }),
-  summarize: (r) => (r.ok ? `Renamed to ${name((r.data as any)?.to ?? "")}.` : (r.summary ?? "I couldn't rename that.")),
+  summarize: (r) => (r.ok ? `Renamed to ${name(r.data?.to ?? "")}.` : (r.summary ?? "I couldn't rename that.")),
   run: async (a, ctx) => {
     try {
       const from = resolveWithin(ctx.roots, a.path);
@@ -475,7 +478,18 @@ function humanBytes(n: number): string {
   return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
 }
 
-export const folderSummary: Tool<{ dir?: string }> = {
+export const folderSummary: Tool<
+  { dir?: string },
+  {
+    dir: string;
+    totalFiles: number;
+    totalBytes: number;
+    truncated: boolean;
+    largestFiles: { path: string; size: number }[];
+    largestSubfolders: { name: string; bytes: number }[];
+    byType: { ext: string; bytes: number; count: number }[];
+  }
+> = {
   name: "folder_summary",
   modelDescription:
     "Summarize how much space a folder uses, recursively: total size, the biggest files, the biggest sub-folders, and a breakdown by file type. Read-only. Use this for 'what's taking up space' or 'help me free up room'.",
@@ -489,10 +503,9 @@ export const folderSummary: Tool<{ dir?: string }> = {
   describe: (a) => ({ action: `Sizing up ${a.dir ? name(a.dir) : "the folder"}`, reversibility: "reversible" }),
   summarize: (r) => {
     if (!r.ok) return r.summary ?? "I couldn't size up that folder.";
-    const d = r.data as any;
-    const big = d?.largestFiles?.[0];
+    const big = r.data?.largestFiles?.[0];
     const tail = big ? `, biggest is ${name(big.path)} (${humanBytes(big.size)})` : "";
-    return `Looked through ${name(d?.dir ?? "the folder")} — ${d?.totalFiles ?? 0} file(s), ${humanBytes(d?.totalBytes ?? 0)}${tail}.`;
+    return `Looked through ${name(r.data?.dir ?? "the folder")} — ${r.data?.totalFiles ?? 0} file(s), ${humanBytes(r.data?.totalBytes ?? 0)}${tail}.`;
   },
   run: async (a, ctx) => {
     try {
@@ -599,7 +612,15 @@ export const folderSummary: Tool<{ dir?: string }> = {
 // ---- find_duplicates (read-only) — backs the "find duplicate files" example chip. Groups by
 // size first (cheap), then content-hashes only the size-collisions so it never reads the whole
 // tree. Read-only: it REPORTS duplicate sets; the agent uses move_file/delete_file to act. ----
-export const findDuplicates: Tool<{ dir?: string }> = {
+export const findDuplicates: Tool<
+  { dir?: string },
+  {
+    dir: string;
+    groups: { size: number; paths: string[]; keeper: string; wastedBytes: number }[];
+    wastedBytes: number;
+    truncated: boolean;
+  }
+> = {
   name: "find_duplicates",
   modelDescription:
     "Find sets of duplicate files (byte-for-byte identical) inside a folder, recursively. Read-only — it reports the duplicate groups and which copy to keep; use move_file/delete_file to round them up.",
@@ -613,10 +634,9 @@ export const findDuplicates: Tool<{ dir?: string }> = {
   describe: (a) => ({ action: `Looking for duplicate files in ${a.dir ? name(a.dir) : "the folder"}`, reversibility: "reversible" }),
   summarize: (r) => {
     if (!r.ok) return r.summary ?? "I couldn't scan for duplicates.";
-    const d = r.data as any;
-    const sets = d?.groups?.length ?? 0;
+    const sets = r.data?.groups?.length ?? 0;
     return sets
-      ? `Found ${sets} set${sets === 1 ? "" : "s"} of duplicates — about ${humanBytes(d.wastedBytes ?? 0)} could be freed.`
+      ? `Found ${sets} set${sets === 1 ? "" : "s"} of duplicates — about ${humanBytes(r.data?.wastedBytes ?? 0)} could be freed.`
       : "No duplicate files found.";
   },
   run: async (a, ctx) => {

@@ -116,7 +116,7 @@ export function parseDdgResults(html: string, cap = 8): SearchResult[] {
   return out;
 }
 
-export const webSearch: Tool<{ query: string }> = {
+export const webSearch: Tool<{ query: string }, { results: SearchResult[] }> = {
   name: "web_search",
   modelDescription: "Search the web and get a list of result titles, links, and snippets. Read-only.",
   jsonSchema: {
@@ -128,8 +128,8 @@ export const webSearch: Tool<{ query: string }> = {
   argsSchema: z.object({ query: z.string().min(1) }),
   gated: false,
   describe: (a) => ({ action: `Searching the web for "${a.query.slice(0, 60)}"`, reversibility: "reversible" }),
-  summarize: (r) => (r.ok ? `Found ${(r.data as any)?.results?.length ?? 0} result(s).` : "I couldn't search just now."),
-  run: async (a, ctx): Promise<ToolResult> => {
+  summarize: (r) => (r.ok ? `Found ${r.data?.results?.length ?? 0} result(s).` : "I couldn't search just now."),
+  run: async (a, ctx): Promise<ToolResult<{ results: SearchResult[] }>> => {
     try {
       const res = await fetch("https://html.duckduckgo.com/html/", {
         method: "POST",
@@ -147,7 +147,7 @@ export const webSearch: Tool<{ query: string }> = {
   },
 };
 
-export const webFetch: Tool<{ url: string }> = {
+export const webFetch: Tool<{ url: string }, { url: string; text: string }> = {
   name: "web_fetch",
   modelDescription: "Open a web page and read its text content. Read-only. Give a full https URL.",
   jsonSchema: {
@@ -166,7 +166,7 @@ export const webFetch: Tool<{ url: string }> = {
     return { action: `Reading the page at ${host}`, reversibility: "reversible" };
   },
   summarize: (r) => (r.ok ? "Read the page." : "I couldn't open that page."),
-  run: async (a, ctx): Promise<ToolResult> => {
+  run: async (a, ctx): Promise<ToolResult<{ url: string; text: string }>> => {
     try {
       const res = await fetch(a.url, { headers: { "User-Agent": UA }, signal: withDeadline(ctx.signal) });
       if (!res.ok) return { ok: false, error: `http_${res.status}`, summary: "That page didn't load." };

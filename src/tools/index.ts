@@ -27,11 +27,11 @@ export type Reversibility = "reversible" | "permanent" | "unknown";
 // mid-irreversible-action). The loop must NEVER auto-retry an uncertain permanent call.
 export type Outcome = "done" | "failed" | "uncertain";
 
-export interface ToolResult {
+export interface ToolResult<D = unknown> {
   ok: boolean;
   outcome?: Outcome; // defaults: ok→"done", !ok→"failed"; set "uncertain" explicitly
   summary?: string; // optional raw; the user-facing line comes from tool.summarize()
-  data?: unknown; // structured payload for the model
+  data?: D; // structured payload for the model (typed per tool; defaults to unknown)
   bytes?: number;
   error?: string; // machine code for trace + model recovery — never shown raw to a user
 }
@@ -48,15 +48,15 @@ export interface ToolDescription {
 // ok:false re-proposes with fresh data instead of running. Optional; most tools skip it.
 export type PreflightResult = { ok: true } | { ok: false; userSummary: string; refreshed?: ToolDescription };
 
-export interface Tool<A = unknown> {
+export interface Tool<A = unknown, D = unknown> {
   name: string;
   modelDescription: string; // description sent to the model
   jsonSchema: Record<string, unknown>; // JSON Schema for the API `parameters`
   argsSchema: z.ZodType<A>; // runtime validation (defense, not just parsing)
   gated: boolean; // requires human approval before running
   describe(args: A): ToolDescription;
-  summarize(result: ToolResult): string;
-  run(args: A, ctx: ToolContext): Promise<ToolResult>;
+  summarize(result: ToolResult<D>): string; // D types result.data for the narration line
+  run(args: A, ctx: ToolContext): Promise<ToolResult<D>>;
   preflight?(args: A, ctx: ToolContext): Promise<PreflightResult>; // optional commit-time re-check
 }
 
