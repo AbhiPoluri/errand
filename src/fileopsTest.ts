@@ -149,6 +149,29 @@ async function testFindDuplicates() {
   rmSync(root, { recursive: true, force: true });
 }
 
+async function testTruncationHonesty() {
+  console.log("\n== truncated scans reported honestly (r3 rank 1) ==");
+  const root = tmp("errand-trunc-");
+  mkdirSync(join(root, "a"));
+  writeFileSync(join(root, "a", "x.txt"), "dup-content");
+  writeFileSync(join(root, "y.txt"), "dup-content");
+  const prev = process.env.ERRAND_MAX_NODES;
+  process.env.ERRAND_MAX_NODES = "1"; // force the walk to truncate after 1 node
+  try {
+    const dup = await findDuplicates.run({}, ctxFor(root, new Journal()));
+    check("find_duplicates flags truncated", dup.data?.truncated === true);
+    check("truncated dup does NOT claim 'No duplicate files found'", !findDuplicates.summarize(dup).includes("No duplicate files found"));
+    check("truncated dup admits it couldn't scan all", /too big to check/.test(findDuplicates.summarize(dup)), findDuplicates.summarize(dup));
+    const sum = await folderSummary.run({}, ctxFor(root, new Journal()));
+    check("folder_summary flags truncated", sum.data?.truncated === true);
+    check("truncated summary admits it couldn't measure all", /too big to measure/.test(folderSummary.summarize(sum)), folderSummary.summarize(sum));
+  } finally {
+    if (prev === undefined) delete process.env.ERRAND_MAX_NODES;
+    else process.env.ERRAND_MAX_NODES = prev;
+  }
+  rmSync(root, { recursive: true, force: true });
+}
+
 function testRegistryHygiene() {
   console.log("\n== registry hygiene ==");
   const reg = new Registry();
@@ -165,6 +188,7 @@ async function main() {
   await testDeleteUniqueDest();
   await testFolderSummary();
   await testFindDuplicates();
+  await testTruncationHonesty();
   testRegistryHygiene();
   console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILED"}`);
   process.exit(failures === 0 ? 0 : 1);

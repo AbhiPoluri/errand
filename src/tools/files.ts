@@ -505,13 +505,14 @@ export const folderSummary: Tool<
     if (!r.ok) return r.summary ?? "I couldn't size up that folder.";
     const big = r.data?.largestFiles?.[0];
     const tail = big ? `, biggest is ${name(big.path)} (${humanBytes(big.size)})` : "";
-    return `Looked through ${name(r.data?.dir ?? "the folder")} — ${r.data?.totalFiles ?? 0} file(s), ${humanBytes(r.data?.totalBytes ?? 0)}${tail}.`;
+    const partial = r.data?.truncated ? " (this folder was too big to measure completely)" : "";
+    return `Looked through ${name(r.data?.dir ?? "the folder")} — ${r.data?.totalFiles ?? 0} file(s), ${humanBytes(r.data?.totalBytes ?? 0)}${tail}${partial}.`;
   },
   run: async (a, ctx) => {
     try {
       const root = resolveWithin(ctx.roots, a.dir ?? ".");
       assertRealWithin(ctx.roots, root);
-      const MAX_NODES = 20_000; // walk budget — stop and flag `truncated` rather than hang
+      const MAX_NODES = Number(process.env.ERRAND_MAX_NODES) || 20_000; // walk budget — flag truncated, don't hang
       const MAX_DEPTH = 8;
       const TOP = 5;
       let nodes = 0;
@@ -635,15 +636,20 @@ export const findDuplicates: Tool<
   summarize: (r) => {
     if (!r.ok) return r.summary ?? "I couldn't scan for duplicates.";
     const sets = r.data?.groups?.length ?? 0;
-    return sets
-      ? `Found ${sets} set${sets === 1 ? "" : "s"} of duplicates — about ${humanBytes(r.data?.wastedBytes ?? 0)} could be freed.`
-      : "No duplicate files found.";
+    const trunc = r.data?.truncated;
+    if (sets === 0) {
+      return trunc
+        ? "No duplicates found in the part I could scan — the folder was too big to check all of it."
+        : "No duplicate files found.";
+    }
+    const base = `Found ${sets} set${sets === 1 ? "" : "s"} of duplicates — about ${humanBytes(r.data?.wastedBytes ?? 0)} could be freed`;
+    return trunc ? `${base}, and there may be more I couldn't reach.` : `${base}.`;
   },
   run: async (a, ctx) => {
     try {
       const root = resolveWithin(ctx.roots, a.dir ?? ".");
       assertRealWithin(ctx.roots, root);
-      const MAX_NODES = 20_000;
+      const MAX_NODES = Number(process.env.ERRAND_MAX_NODES) || 20_000;
       const MAX_DEPTH = 8;
       let nodes = 0;
       let truncated = false;
