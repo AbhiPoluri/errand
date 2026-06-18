@@ -89,9 +89,14 @@ function waitComplete(tabId, timeout = 20000) {
 
 function readPage() {
   const CAP = 80;
-  // Broadened beyond button/link so SPA menus, tabs, switches and options (Outlook, Gmail) are reachable.
-  const SEL =
+  // STRONG = standard interactive elements (real buttons/links/inputs + ARIA roles).
+  const STRONG =
     "a, button, input, textarea, select, [role=button], [role=link], [role=textbox], [role=menuitem], [role=menuitemcheckbox], [role=menuitemradio], [role=combobox], [role=switch], [role=checkbox], [role=radio], [role=tab], [role=option]";
+  // WEAK = custom clickables with NO ARIA role — e.g. Gmail's confirm-dialog buttons are
+  // `<div jsaction="click:…">` with no role, invisible to STRONG. We surface a WEAK element only
+  // when it's a labelled LEAF (has a short text label and contains no STRONG control), so we catch
+  // the real div-button without flooding the list with jsaction wrapper containers.
+  const WEAK = "[jsaction], [onclick]";
   const seen = new Set();
   const isVisible = (el) => {
     const rect = el.getBoundingClientRect();
@@ -99,6 +104,8 @@ function readPage() {
     const cs = getComputedStyle(el);
     return cs.visibility !== "hidden" && cs.display !== "none";
   };
+  const labelOf = (el) =>
+    (el.getAttribute("aria-label") || el.innerText || el.getAttribute("placeholder") || el.value || el.getAttribute("title") || el.getAttribute("name") || "").trim();
   // Collect interactive descendants of `root`, DESCENDING INTO SHADOW ROOTS (web-component UIs put
   // their controls inside shadow DOM, which querySelectorAll can't reach). Bounded so a huge page can't stall.
   const collect = (root, out, budget) => {
@@ -112,9 +119,17 @@ function readPage() {
       if (out.length >= budget) return;
       if (el.shadowRoot) collect(el.shadowRoot, out, budget);
       if (seen.has(el)) continue;
-      if (el.matches && el.matches(SEL) && isVisible(el)) {
+      if (!el.matches || !isVisible(el)) continue;
+      if (el.matches(STRONG)) {
         seen.add(el);
         out.push(el);
+      } else if (el.matches(WEAK)) {
+        const lab = labelOf(el);
+        // a real custom button is a labelled leaf — not a big jsaction wrapper around real controls
+        if (lab && lab.length <= 60 && !el.querySelector(STRONG)) {
+          seen.add(el);
+          out.push(el);
+        }
       }
     }
   };
