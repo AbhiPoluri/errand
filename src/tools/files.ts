@@ -419,11 +419,13 @@ export const renameFile: Tool<{ path: string; newName: string }> = {
   },
   argsSchema: z.object({
     path: z.string().min(1),
-    // A bare basename: no path separators, no parent traversal. Keeps the op in-place and in-scope.
+    // A bare basename: no path separators, and not a "." / ".." segment. The slash bans make
+    // traversal impossible, so only the two literal traversal segments need rejecting — a ".."
+    // SUBSTRING (e.g. "data..clean.csv") is a perfectly valid filename. resolveWithin re-checks scope.
     newName: z
       .string()
       .min(1)
-      .refine((n) => !n.includes("/") && !n.includes("\\") && n !== ".." && !n.includes(".."), {
+      .refine((n) => !n.includes("/") && !n.includes("\\") && n !== "." && n !== "..", {
         message: "must be a plain name, not a path",
       }),
   }),
@@ -535,6 +537,7 @@ export const folderSummary: Tool<{ dir?: string }> = {
         }
         let bytes = 0;
         for (const d of entries) {
+          if (d.isDirectory() && d.name === ".errand-review") continue; // Errand's own undo store
           if (nodes >= MAX_NODES) {
             truncated = true;
             break;
@@ -556,6 +559,7 @@ export const folderSummary: Tool<{ dir?: string }> = {
       }
       const subfolders: { name: string; bytes: number }[] = [];
       for (const d of top) {
+        if (d.isDirectory() && d.name === ".errand-review") continue; // don't count our own undo store
         if (nodes >= MAX_NODES) {
           truncated = true;
           break;

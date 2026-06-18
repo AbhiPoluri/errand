@@ -54,13 +54,15 @@ function testRenameValidation() {
   const reg = new Registry().register(renameFile);
   const slash = reg.prepare("rename_file", JSON.stringify({ path: "x.txt", newName: "sub/b.txt" }));
   const back = reg.prepare("rename_file", JSON.stringify({ path: "x.txt", newName: "a\\b.txt" }));
+  const dot = reg.prepare("rename_file", JSON.stringify({ path: "x.txt", newName: "." }));
   const dotdot = reg.prepare("rename_file", JSON.stringify({ path: "x.txt", newName: ".." }));
-  const traverse = reg.prepare("rename_file", JSON.stringify({ path: "x.txt", newName: "..evil" }));
+  const dotsInName = reg.prepare("rename_file", JSON.stringify({ path: "x.txt", newName: "data..clean.csv" }));
   const good = reg.prepare("rename_file", JSON.stringify({ path: "x.txt", newName: "good name.txt" }));
   check("rejects newName containing '/'", !slash.ok);
   check("rejects newName containing '\\\\'", !back.ok);
+  check("rejects newName '.'", !dot.ok);
   check("rejects newName '..'", !dotdot.ok);
-  check("rejects newName containing '..'", !traverse.ok);
+  check("accepts a valid name that CONTAINS '..' (data..clean.csv)", dotsInName.ok);
   check("accepts a plain newName", good.ok);
 }
 
@@ -94,12 +96,15 @@ async function testFolderSummary() {
   mkdirSync(join(root, "sub", "deep"), { recursive: true });
   writeFileSync(join(root, "sub", "small.txt"), Buffer.alloc(10));
   writeFileSync(join(root, "sub", "deep", "x.txt"), Buffer.alloc(5));
+  // Errand's own undo store must NOT be counted as the user's disk usage.
+  mkdirSync(join(root, ".errand-review", "run1", ".snapshots"), { recursive: true });
+  writeFileSync(join(root, ".errand-review", "run1", "parked.bin"), Buffer.alloc(99_999));
   const j = new Journal();
   const res = await folderSummary.run({}, ctxFor(root, j));
   check("summary returned ok", res.ok);
   const d = res.data as any;
-  check("counted all 3 files (recursive)", d?.totalFiles === 3, `${d?.totalFiles}`);
-  check("summed all bytes (3000+10+5)", d?.totalBytes === 3015, `${d?.totalBytes}`);
+  check("counted all 3 user files (recursive), excluding .errand-review", d?.totalFiles === 3, `${d?.totalFiles}`);
+  check("summed only user bytes (3000+10+5), not the 99999 parked file", d?.totalBytes === 3015, `${d?.totalBytes}`);
   check("largest file is big.bin (3000)", d?.largestFiles?.[0]?.size === 3000, `${d?.largestFiles?.[0]?.size}`);
   check(
     "biggest sub-folder is 'sub' at 15 bytes",

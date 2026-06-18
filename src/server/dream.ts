@@ -8,15 +8,19 @@ import { config } from "../config.ts";
 import * as store from "./store.ts";
 
 // The dream model output is the riskiest untyped input in the app — it drives DESTRUCTIVE
-// de-dup (delete/rewrite of stored memories). Validate it by construction before acting:
-// ids must be real strings, items must have text. A malformed/hostile payload fails the parse
-// and the whole pass becomes a safe no-op. `text` on a group is optional (a delete-only group
-// is allowed); `kind`/`prompt` are nullish so a model emitting null instead of "" still passes.
-const DreamOutput = z.object({
-  newMemories: z.array(z.object({ text: z.string(), kind: z.string().nullish() })).optional(),
-  duplicateGroups: z.array(z.object({ ids: z.array(z.string()), text: z.string().nullish() })).optional(),
-  suggestions: z.array(z.object({ text: z.string(), prompt: z.string().nullish() })).optional(),
+// de-dup (delete/rewrite of stored memories). Validate PER ELEMENT so one malformed item doesn't
+// discard the whole pass (small models often emit one bad entry alongside good ones): the
+// destructive path is still validated (group ids coerced to strings, items must have text), but
+// valid memories/dedups still apply. `text` on a group is optional (delete-only groups allowed);
+// `kind`/`prompt` are nullish so a model emitting null instead of "" still passes.
+const DreamMemory = z.object({ text: z.string(), kind: z.string().nullish() });
+const DreamGroup = z.object({
+  ids: z.array(z.any()).transform((a) => a.filter((x): x is string => typeof x === "string")),
+  text: z.string().nullish(),
 });
+const DreamSuggestion = z.object({ text: z.string(), prompt: z.string().nullish() });
+const validItems = <T>(arr: unknown, schema: z.ZodType<T>): T[] =>
+  (Array.isArray(arr) ? arr : []).map((x) => schema.safeParse(x)).flatMap((r) => (r.success ? [r.data] : []));
 
 const SCHEMA_HINT = `Return ONLY a JSON object of this shape:
 {
@@ -57,14 +61,15 @@ export async function dream(): Promise<{ added: number; merged: number; removed:
     return { added: 0, merged: 0, removed: 0, suggested: 0 };
   }
 
-  let out: z.infer<typeof DreamOutput>;
+  let out: any;
   try {
-    const parsed = DreamOutput.safeParse(JSON.parse(raw));
-    if (!parsed.success) return { added: 0, merged: 0, removed: 0, suggested: 0 };
-    out = parsed.data;
+    out = JSON.parse(raw);
   } catch {
     return { added: 0, merged: 0, removed: 0, suggested: 0 };
   }
+  const newMemories = validItems(out?.newMemories, DreamMemory);
+  const groups = validItems(out?.duplicateGroups, DreamGroup);
+  const suggestionList = validItems(out?.suggestions, DreamSuggestion);
 
   const ids = new Set(memList.map((m) => m.id));
 
@@ -72,7 +77,7 @@ export async function dream(): Promise<{ added: number; merged: number; removed:
   // and deleting the rest. We always keep one per group, so this can't wipe a fact.
   let merged = 0;
   let removed = 0;
-  for (const g of out.duplicateGroups ?? []) {
+  for (const g of groups) {
     const gids = g.ids.filter((id) => ids.has(id)); // only operate on ids in the current set
     if (gids.length === 0) continue;
     const keep = gids[0];
@@ -89,14 +94,14 @@ export async function dream(): Promise<{ added: number; merged: number; removed:
 
   // New durable facts (addMemory still skips exact duplicates).
   let added = 0;
-  for (const m of out.newMemories ?? []) {
+  for (const m of newMemories) {
     const before = store.listMemories().length;
     await store.addMemory(m.text, m.kind ?? "fact", "dream");
     if (store.listMemories().length > before) added++; // addMemory no-ops on blank/exact-dup
   }
 
   let suggested = 0;
-  for (const s of (out.suggestions ?? []).slice(0, 3)) {
+  for (const s of suggestionList.slice(0, 3)) {
     store.addSuggestion(s.text, s.prompt && s.prompt.trim() ? s.prompt : null);
     suggested++;
   }
