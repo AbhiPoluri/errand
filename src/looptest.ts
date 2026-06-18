@@ -273,9 +273,71 @@ async function testStreamIdleWatchdog() {
   check("did NOT hang or report a finish", !tap.events.some((e) => e.type === "run.finished"));
 }
 
+async function testRetryBeforeOutput() {
+  console.log("\n== 9. transient transport failure BEFORE any output -> retries + finishes ==");
+  const registry = new Registry().register(stubTool("do_thing", { result: { ok: true } }));
+  const runId = crypto.randomUUID();
+  const session = new Session(SYSTEM);
+  const tap = new Tap();
+  let call = 0;
+  const client = {
+    chat: {
+      completions: {
+        create: async () => {
+          if (call++ === 0) throw new Error("ECONNRESET");
+          return textResp("recovered after retry");
+        },
+      },
+    },
+  } as unknown as OpenAI;
+  const runner = new AgentRunner({ session, sink: tap, registry, model: "stub", logger: new Logger(runId), runId, client, stream: false });
+  const prev = process.env.RETRY_BACKOFF_MS;
+  process.env.RETRY_BACKOFF_MS = "0";
+  try {
+    await runner.send("do it", new AbortController().signal);
+  } finally {
+    if (prev === undefined) delete process.env.RETRY_BACKOFF_MS;
+    else process.env.RETRY_BACKOFF_MS = prev;
+  }
+  check("retried and finished", tap.events.some((e) => e.type === "run.finished"));
+  check("no transport error surfaced (retry absorbed it)", !tap.events.some((e) => e.type === "run.error"));
+  check("create was called twice (1 fail + 1 success)", call === 2, `${call}`);
+}
+
+async function testNoRetryAfterOutput() {
+  console.log("\n== 10. transport failure AFTER a token streamed -> no retry, no duplicate ==");
+  const registry = new Registry().register(stubTool("do_thing", { result: { ok: true } }));
+  const runId = crypto.randomUUID();
+  const session = new Session(SYSTEM);
+  const tap = new Tap();
+  const throwingStream = {
+    [Symbol.asyncIterator]() {
+      let n = 0;
+      return {
+        next() {
+          if (n++ === 0) return Promise.resolve({ done: false, value: { choices: [{ delta: { content: "partial" } }] } });
+          return Promise.reject(new Error("ECONNRESET"));
+        },
+        return: () => Promise.resolve({ done: true, value: undefined }),
+      };
+    },
+    controller: { abort() {} },
+  };
+  let call = 0;
+  const client = { chat: { completions: { create: async () => (call++, throwingStream) } } } as unknown as OpenAI;
+  const runner = new AgentRunner({ session, sink: tap, registry, model: "stub", logger: new Logger(runId), runId, client, stream: true });
+  await runner.send("stream then fail", new AbortController().signal);
+  const deltas = tap.events.filter((e) => e.type === "message.delta").length;
+  check("emitted the partial token exactly once (no retry duplicate)", deltas === 1, `${deltas}`);
+  check("surfaced a transport error", tap.events.some((e) => e.type === "run.error" && e.kind === "transport"));
+  check("create called once (did NOT retry after output)", call === 1, `${call}`);
+}
+
 async function main() {
   await testFailingActionAborts();
   await testStreamIdleWatchdog();
+  await testRetryBeforeOutput();
+  await testNoRetryAfterOutput();
   await testDistinctSuccessesDoNotAbort();
   await testIdenticalSuccessLoopAborts();
   await testDeniedApprovalsDoNotAbort();

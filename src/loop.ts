@@ -116,6 +116,11 @@ export class AgentRunner {
         tool_choice: "auto" as const,
         parallel_tool_calls: false, // INVARIANT
       };
+      // Bounded retry for a TRANSIENT transport failure that struck before any output this turn.
+      let attempt = 0;
+      const maxRetries = Number(process.env.MAX_TRANSPORT_RETRIES ?? "2");
+      const backoffMs = Number(process.env.RETRY_BACKOFF_MS ?? "500");
+      for (;;) {
       try {
         if (this.stream) {
           const stream = await this.client.chat.completions.create(
@@ -192,12 +197,24 @@ export class AgentRunner {
           }
           // No deltas were streamed; the reply (if no tools) is emitted via message.completed below.
         }
+        break; // create + consume succeeded — leave the retry loop
       } catch (err: any) {
         if (signal.aborted || err?.name === "AbortError") {
           await this.emit({ type: "run.error", kind: "cancelled", userMessage: "Okay, I stopped.", recoverable: true });
           return "";
         }
         this.o.logger.log("transport_error", String(err?.stack ?? err));
+        // Retry ONLY a transient failure that struck BEFORE any token/tool was emitted this turn —
+        // retrying after output would duplicate it. (Cancel/length/content_filter never throw here.)
+        if (attempt < maxRetries && content === "" && toolAcc.length === 0) {
+          attempt++;
+          await this.emit({ type: "thinking.summary", summary: "Reconnecting…" });
+          await new Promise((r) => setTimeout(r, backoffMs * attempt + Math.floor(Math.random() * backoffMs)));
+          reasoning = "";
+          finishReason = null;
+          usage = null;
+          continue; // try the request again
+        }
         await this.emit({
           type: "run.error",
           kind: "transport",
@@ -206,6 +223,7 @@ export class AgentRunner {
         });
         return "";
       }
+      } // end retry loop
 
       const toolCalls = toolAcc.filter(Boolean);
       const msg = {
