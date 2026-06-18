@@ -11,6 +11,17 @@ body {
   height: 100%;
 }
 
+/* Keyboard-focus ring. :focus-visible fires only for keyboard navigation, so mouse/touch users
+   never see it — the calm editorial look is untouched — while keyboard and screen-reader users
+   get a clear, on-brand (clay) indicator on buttons, links, chips, selects, and the Recently rows. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid rgba(194, 85, 46, 0.75);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+}
+
 /* Warm paper base with a faint clay wash at the top — editorial depth, not decoration. */
 body {
   @apply text-stone-900 antialiased;

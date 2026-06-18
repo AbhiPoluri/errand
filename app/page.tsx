@@ -66,8 +66,16 @@ export default function Page() {
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
+  const [, setClock] = useState(0); // ticks while idle so relative timestamps stay fresh
 
   const idle = run.state.phase === "idle";
+
+  // Re-render once a minute on Home so "just now" → "1 min ago" without a reload.
+  useEffect(() => {
+    if (!idle) return;
+    const h = setInterval(() => setClock((n) => n + 1), 60_000);
+    return () => clearInterval(h);
+  }, [idle]);
 
   const toggleSelect = (id: string) =>
     setSelected((s) => {
@@ -293,6 +301,8 @@ export default function Page() {
         >
           <textarea
             value={input}
+            autoFocus
+            aria-label="What would you like done?"
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
@@ -338,6 +348,7 @@ export default function Page() {
                 ref={fileRef}
                 type="file"
                 multiple
+                aria-label="Attach a file"
                 className="hidden"
                 onChange={(e) => {
                   uploadFiles(Array.from(e.target.files ?? []));
@@ -637,7 +648,7 @@ export default function Page() {
                             deleteRuns([r.runId]);
                           }}
                           aria-label="Delete this conversation"
-                          className="shrink-0 text-stone-300 opacity-0 transition group-hover:opacity-100 hover:text-brick-600"
+                          className="shrink-0 text-stone-400 opacity-60 transition hover:text-brick-600 sm:opacity-0 sm:group-hover:opacity-100"
                         >
                           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden>
                             <path d="M5 7h14M10 4h4M6 7l1 13h10l1-13M10 11v5M14 11v5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
