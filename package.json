@@ -11,6 +11,7 @@
     "v2:test": "tsx src/v2test.ts",
     "v3:test": "tsx src/v3test.ts",
     "loop:test": "tsx src/looptest.ts",
+    "web:test": "tsx src/webtest.ts",
     "mem:test": "tsx src/memtest.ts",
     "restart:test": "tsx src/restartTest.ts",
     "doc:test": "tsx src/docTest.ts",

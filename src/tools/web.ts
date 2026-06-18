@@ -43,6 +43,37 @@ function unwrapDdg(href: string): string {
   return href.startsWith("//") ? "https:" + href : href;
 }
 
+export interface SearchResult {
+  title: string;
+  url: string;
+  snippet: string;
+}
+
+// Parse DDG HTML result-by-result. Each result__a (title+link) is paired with the
+// result__snippet that falls in ITS block — between this link and the next — rather than
+// zipping two flat arrays by index. The flat zip drifts the moment a row (an ad, a zero-click
+// answer, a "related") has a result__a with no matching result__snippet, attaching the wrong
+// snippet to every result after it. A result with no snippet in its block gets "".
+export function parseDdgResults(html: string, cap = 8): SearchResult[] {
+  const linkRe = /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+  const snippetRe = /<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/gi;
+  const links: { pos: number; url: string; title: string }[] = [];
+  let lm: RegExpExecArray | null;
+  while ((lm = linkRe.exec(html))) links.push({ pos: lm.index, url: unwrapDdg(lm[1]), title: stripTags(lm[2]) });
+  const snips: { pos: number; text: string }[] = [];
+  let sm: RegExpExecArray | null;
+  while ((sm = snippetRe.exec(html))) snips.push({ pos: sm.index, text: stripTags(sm[1]) });
+  const out: SearchResult[] = [];
+  for (let k = 0; k < links.length && out.length < cap; k++) {
+    const start = links[k].pos;
+    const end = k + 1 < links.length ? links[k + 1].pos : Infinity;
+    const snip = snips.find((s) => s.pos > start && s.pos < end); // snippet inside THIS result's block
+    if (!links[k].title && !links[k].url) continue;
+    out.push({ title: links[k].title, url: links[k].url, snippet: snip?.text ?? "" });
+  }
+  return out;
+}
+
 export const webSearch: Tool<{ query: string }> = {
   name: "web_search",
   modelDescription: "Search the web and get a list of result titles, links, and snippets. Read-only.",
@@ -65,19 +96,7 @@ export const webSearch: Tool<{ query: string }> = {
         signal: ctx.signal,
       });
       const html = await res.text();
-      const results: { title: string; url: string; snippet: string }[] = [];
-      // result links
-      const linkRe = /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
-      const snippetRe = /<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/gi;
-      const snippets: string[] = [];
-      let sm: RegExpExecArray | null;
-      while ((sm = snippetRe.exec(html))) snippets.push(stripTags(sm[1]));
-      let lm: RegExpExecArray | null;
-      let i = 0;
-      while ((lm = linkRe.exec(html)) && results.length < 8) {
-        results.push({ title: stripTags(lm[2]), url: unwrapDdg(lm[1]), snippet: snippets[i] ?? "" });
-        i++;
-      }
+      const results = parseDdgResults(html);
       if (results.length === 0) return { ok: false, error: "no_results", summary: "I couldn't find anything for that." };
       return { ok: true, data: { results } };
     } catch (e: any) {
