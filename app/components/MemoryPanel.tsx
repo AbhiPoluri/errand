@@ -174,7 +174,7 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
             aria-labelledby="settings-heading"
             className="lift-lg flex max-h-[82vh] w-full max-w-[460px] flex-col overflow-hidden rounded-3xl border border-stone-200/80 bg-white"
           >
-            <div className="flex items-center justify-between border-b border-stone-100 px-6 py-4">
+            <div className="flex shrink-0 items-center justify-between border-b border-stone-100 px-6 py-4">
               <p id="settings-heading" className="text-[15px] font-semibold text-stone-900">Settings</p>
               <button ref={closeRef} onClick={onClose} aria-label="Close settings" className="text-stone-400 transition hover:text-stone-700 active:scale-95">
                 <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden>
@@ -183,6 +183,9 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
               </button>
             </div>
 
+            {/* Everything below the pinned header scrolls as one — otherwise the upper sections
+                (Model / What Errand can do / Dreaming) clip when they're taller than the modal. */}
+            <div className="min-h-0 flex-1 overflow-y-auto">
             {/* model + endpoint switcher */}
             <div className="border-b border-stone-100 px-6 py-4">
               <p className="text-sm font-medium text-stone-900">Model</p>
@@ -314,7 +317,7 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
             </div>
 
             {/* memories */}
-            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+            <div className="px-6 py-4">
               {memories.length === 0 ? (
                 <p className="py-6 text-center text-sm text-stone-400">
                   Nothing remembered yet. As you use Errand, it'll learn your preferences and habits.
@@ -341,6 +344,7 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
                   ))}
                 </ul>
               )}
+            </div>
             </div>
           </motion.div>
         </motion.div>
