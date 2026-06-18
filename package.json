@@ -17,6 +17,7 @@
     "journal:test": "tsx src/journaltest.ts",
     "embed:test": "tsx src/server/embedtest.ts",
     "store:test": "tsx src/storetest.ts",
+    "websink:test": "tsx src/server/websinktest.ts",
     "restart:test": "tsx src/restartTest.ts",
     "doc:test": "tsx src/docTest.ts",
     "ocr:test": "tsx src/ocrTest.ts",
