@@ -95,6 +95,8 @@ export function resolveResult(id: string, result: any): boolean {
   if (!p) return false;
   clearTimeout(p.timer);
   pending.delete(id);
-  p.resolve(result);
+  // Normalize to the {ok, ...} envelope the loop expects: a malformed extension reply (a bare
+  // string/number/null) must not smuggle an arbitrary shape into the tool result the model sees.
+  p.resolve(result && typeof result === "object" ? result : { ok: false, error: "bad result" });
   return true;
 }

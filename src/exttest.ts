@@ -1,7 +1,7 @@
 // Extension bridge test (r2 rank 2) — offline, pure in-memory (globalThis maps, no network).
 // Verifies a disconnect/reconnect fails parked sendCommand promises IMMEDIATELY with an honest
 // reason, instead of leaving them to wait out the 30s "took too long" timer.
-import { registerStream, unregisterStream, sendCommand, isExtConnected } from "./server/extension.ts";
+import { registerStream, unregisterStream, sendCommand, isExtConnected, resolveResult } from "./server/extension.ts";
 
 let failures = 0;
 const check = (name: string, cond: boolean, detail = "") => {
@@ -39,6 +39,23 @@ async function main() {
   check("stale unregister(B) ignored", isExtConnected());
   unregisterStream("C");
   check("unregister(C) disconnects", !isExtConnected());
+
+  console.log("\n== a malformed extension result is normalized to the {ok:false} envelope ==");
+  // Capture the command id off the SSE the controller receives, so we can resolve it directly.
+  let lastCmdId = "";
+  const capturing: any = {
+    enqueue(bytes: Uint8Array) {
+      const m = new TextDecoder().decode(bytes).match(/"id":"([^"]+)"/);
+      if (m) lastCmdId = m[1];
+    },
+    close() {},
+  };
+  registerStream(capturing, "F");
+  const parkedF = sendCommand("read", {});
+  resolveResult(lastCmdId, "a-bare-string"); // malformed (not an object)
+  const rr = await settledFast(parkedF);
+  check("malformed (non-object) result normalized to {ok:false}", rr && typeof rr === "object" && rr.ok === false, JSON.stringify(rr));
+  unregisterStream("F");
 
   console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILED"}`);
   process.exit(failures === 0 ? 0 : 1);
