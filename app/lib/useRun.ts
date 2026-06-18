@@ -132,7 +132,10 @@ function apply(s: RunState, e: AgentEvent): RunState {
       }));
     case "run.error":
       if (e.kind === "cancelled") return { ...s, phase: "done", thinking: false, statusLine: e.userMessage };
-      if (s.turns.length) return { ...updateLast(s, (t) => ({ ...t, problem: e.userMessage })), phase: "error", thinking: false };
+      // A mid-stream failure leaves a PARTIAL streamed reply on the in-flight turn (message.completed
+      // never fired). Clear it so we never show a truncated half-answer beside the error banner —
+      // this matches what a reopened run shows (deltas aren't persisted).
+      if (s.turns.length) return { ...updateLast(s, (t) => ({ ...t, reply: "", problem: e.userMessage })), phase: "error", thinking: false };
       return { ...s, phase: "error", thinking: false, problem: e.userMessage };
     case "run.finished":
       return {
