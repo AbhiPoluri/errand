@@ -5,6 +5,7 @@
 import { z } from "zod";
 import type { Tool, ToolResult } from "./index.ts";
 import * as browser from "../server/drive.ts";
+import { classifyClickRisk } from "./clickrisk.ts";
 
 const NOT_CONNECTED: ToolResult = {
   ok: false,
@@ -111,15 +112,11 @@ export const browserRead: Tool<Record<string, never>> = {
   },
 };
 
-// Clicks that DO something consequential on a real site — these still pause for approval.
-const RISKY =
-  /(^|\b)(send|delete|remove|unsubscribe|buy|purchase|pay|checkout|place order|order now|confirm|submit|publish|post|trash|deactivate|sign out|log out|report spam|discard|move to trash)(\b|$)/i;
-
 function elementName(index: number): { name: string; risky: boolean } {
   const info = browser.elementInfo(index);
   const label = info?.label?.trim();
   const name = label ? `"${label.slice(0, 50)}"` : info ? `the ${info.kind}` : `item ${index}`;
-  return { name, risky: label ? RISKY.test(label) : false };
+  return { name, risky: classifyClickRisk(info?.label, info?.kind) };
 }
 
 export const browserClick: Tool<{ index: number }> = {
