@@ -8,7 +8,7 @@ import { Logger } from "../log.ts";
 import { Registry } from "../tools/index.ts";
 import { buildRegistryFor, enabledPacks } from "../capabilities/index.ts";
 import { makeClient } from "../client.ts";
-import { ENDPOINTS } from "../models.ts";
+import { ENDPOINTS, DEFAULT_OLLAMA_BASE_URL, normalizeOllamaBaseUrl } from "../models.ts";
 import { AgentRunner } from "../loop.ts";
 import { type ApprovalGate, type ApprovalRequest, type Decision } from "../approvals.ts";
 import { SYSTEM_PROMPT } from "../prompt.ts";
@@ -108,16 +108,45 @@ function currentModel(): string {
   return store.getSetting("model", config.model);
 }
 
-// The endpoint (cloud OpenRouter or local Ollama) new runs use, from Settings.
+// The endpoint (cloud OpenRouter or local/LAN Ollama) new runs use, from Settings. For Ollama we
+// override the template's baseURL with the user's saved server URL (Settings → Model) so runs can
+// target Ollama on another machine; falls back to the localhost default if none/invalid is saved.
 function currentEndpoint() {
   const key = store.getSetting("endpoint", "openrouter");
-  return ENDPOINTS.find((e) => e.key === key) ?? ENDPOINTS[0];
+  const ep = ENDPOINTS.find((e) => e.key === key) ?? ENDPOINTS[0];
+  if (ep.key === "ollama") {
+    const baseURL = normalizeOllamaBaseUrl(store.getSetting("ollamaBaseUrl", "")) ?? DEFAULT_OLLAMA_BASE_URL;
+    return { ...ep, baseURL };
+  }
+  return ep;
 }
 // A client pointed at the active endpoint (the OpenRouter singleton is left for embeddings/dreaming).
 function currentClient() {
   const ep = currentEndpoint();
   const apiKey = ep.apiKey ?? (ep.apiKeyEnv ? process.env[ep.apiKeyEnv] : "") ?? "";
-  return makeClient(ep.baseURL, apiKey);
+  return makeClient(ep.baseURL, apiKey, ep.requestTimeoutMs);
+}
+
+// Before starting an Ollama run, confirm the configured server is actually reachable. Without this a
+// saved-but-unreachable LAN host (e.g. a Mac Studio that's asleep) would leave the run sitting
+// "working" for the full request timeout before failing — a fast bounded /api/tags probe turns that
+// into an immediate, specific error the run route can show. Always ok for non-Ollama endpoints.
+export async function preflightEndpoint(): Promise<{ ok: true } | { ok: false; problem: string }> {
+  const ep = currentEndpoint();
+  if (ep.key !== "ollama") return { ok: true };
+  const tagsUrl = ep.baseURL.replace(/\/v1\/?$/, "") + "/api/tags";
+  try {
+    const res = await fetch(tagsUrl, { signal: AbortSignal.timeout(2500) });
+    if (!res.ok) {
+      return { ok: false, problem: `Your Ollama server at ${ep.baseURL} returned an error (${res.status}). Is Ollama running there?` };
+    }
+    return { ok: true };
+  } catch {
+    return {
+      ok: false,
+      problem: `I couldn't reach your Ollama server at ${ep.baseURL}. Make sure it's running and on the same network, or switch back to OpenRouter in Settings.`,
+    };
+  }
 }
 
 // Prepend what Errand remembers about the user to the base prompt so it just knows them.

@@ -10,11 +10,11 @@ import { config } from "./config.ts";
 // the per-stream idle watchdog in the loop handles a connection that stalls AFTER first byte.
 const CLIENT_TIMEOUT_MS = Number(process.env.CLIENT_TIMEOUT_MS) || 120_000;
 
-export function makeClient(baseURL: string, apiKey: string): OpenAI {
+export function makeClient(baseURL: string, apiKey: string, timeoutMs: number = CLIENT_TIMEOUT_MS): OpenAI {
   return new OpenAI({
     baseURL,
     apiKey: apiKey || "unused", // local servers ignore it, but the SDK requires a non-empty value
-    timeout: CLIENT_TIMEOUT_MS,
+    timeout: timeoutMs,
     // The agent loop owns retry+backoff (with a user-visible "Reconnecting…" beat and a
     // don't-retry-after-output guard the SDK can't know about). Disable the SDK's own 2 retries so
     // the two layers don't compound into ~9 HTTP requests for one transient failure.

@@ -1,7 +1,7 @@
 // POST /api/runs — start a new run. Returns { runId }. The run executes server-side
 // (real fs + child_process); the browser watches it via the SSE stream.
 import { NextRequest, NextResponse } from "next/server";
-import { startRun, listRuns, removeRun } from "../../../src/server/runRegistry.ts";
+import { startRun, listRuns, removeRun, preflightEndpoint } from "../../../src/server/runRegistry.ts";
 import { checkRoots } from "../../../src/server/folders.ts";
 
 export const runtime = "nodejs"; // NOT edge — tools need fs/child_process; key stays server-side
@@ -22,6 +22,10 @@ export async function POST(req: NextRequest) {
     const pre = checkRoots(roots);
     if (!pre.ok) return NextResponse.json({ error: pre.problem }, { status: 400 });
   }
+  // Pre-flight: if the run targets Ollama, make sure the configured server is reachable so an
+  // asleep/wrong LAN host fails in ~2.5s with a clear message instead of a long opaque "working".
+  const epPre = await preflightEndpoint();
+  if (!epPre.ok) return NextResponse.json({ error: epPre.problem }, { status: 400 });
   // Starting an errand is the first thing every user does, and startRun does real work
   // (memory retrieval -> embeddings, DB writes). Any throw here would otherwise return Next's
   // default unstyled 500 HTML, which the JSON-expecting client renders as nothing. Return calm

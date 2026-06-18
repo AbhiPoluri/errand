@@ -22,6 +22,11 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
   const [savingModel, setSavingModel] = useState(false);
   const [endpoint, setEndpoint] = useState("openrouter");
   const [endpoints, setEndpoints] = useState<{ key: string; label: string; note: string }[]>([]);
+  const [ollamaUrl, setOllamaUrl] = useState("");
+  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
+  const [savingUrl, setSavingUrl] = useState(false);
+  const [urlErr, setUrlErr] = useState<string | null>(null);
+  const [urlStatus, setUrlStatus] = useState<{ kind: "ok" | "warn"; text: string } | null>(null);
   const [caps, setCaps] = useState<
     { id: string; label: string; description: string; enabled: boolean; available: boolean; required: boolean }[]
   >([]);
@@ -60,16 +65,62 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
         setCustomModel(d.current ?? "");
         setEndpoint(d.endpoint ?? "openrouter");
         setEndpoints(d.endpoints ?? []);
+        setOllamaUrl(d.ollamaBaseUrl ?? "");
+        setOllamaModels(d.ollamaModels ?? []);
       })
       .catch(() => {});
   };
 
+  // Save where Ollama lives (this machine or another on the network) and confirm Errand can reach it.
+  // The POST only validates the URL's shape, so after saving we re-detect models at that server and
+  // report the result inline — a successful save with zero models means the box is off or unreachable.
+  // `explicit` lets the reset link pass a value without waiting on the async input state.
+  const saveOllamaUrl = async (explicit?: string) => {
+    const v = (explicit ?? ollamaUrl).trim();
+    if (!v) return;
+    setSavingUrl(true);
+    setUrlErr(null);
+    setUrlStatus(null);
+    const res = await fetch("/api/model", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ollamaBaseUrl: v }),
+    }).catch(() => null);
+    if (res && res.ok) {
+      const d = await res.json().catch(() => ({}));
+      if (d?.ollamaBaseUrl) setOllamaUrl(d.ollamaBaseUrl);
+      // Re-detect models from the saved server to confirm reachability.
+      const g = await fetch("/api/model")
+        .then((r) => r.json())
+        .catch(() => null);
+      const models: string[] = g?.ollamaModels ?? [];
+      setOllamaModels(models);
+      if (g?.current) setModel(g.current);
+      setUrlStatus(
+        models.length
+          ? { kind: "ok", text: `Connected — ${models.length} model${models.length === 1 ? "" : "s"} found.` }
+          : { kind: "warn", text: "Saved, but no models found there. Is Ollama running on that machine?" },
+      );
+    } else {
+      const d = res ? await res.json().catch(() => ({})) : {};
+      setUrlErr(d?.error ?? "That URL isn't valid.");
+    }
+    setSavingUrl(false);
+  };
+
+  // Revert to the bundled localhost default (the empty-field path is blocked, so do it explicitly).
+  const resetOllamaUrl = () => {
+    setOllamaUrl("http://localhost:11434/v1");
+    saveOllamaUrl("http://localhost:11434/v1");
+  };
+
   // Switch where the agent runs (cloud OpenRouter or local Ollama). Keep the model compatible:
-  // OpenRouter ids contain a "/", Ollama tags (e.g. "llama3.2:3b") don't.
+  // OpenRouter ids contain a "/", Ollama tags (e.g. "llama3.2:3b") don't. When moving to Ollama,
+  // prefer a model actually detected on the configured server (a remote box may not have llama3.2:3b).
   const chooseEndpoint = async (key: string) => {
     setEndpoint(key);
     const body: { endpoint: string; model?: string } = { endpoint: key };
-    if (key === "ollama" && model.includes("/")) body.model = "llama3.2:3b";
+    if (key === "ollama" && model.includes("/")) body.model = ollamaModels[0] ?? "llama3.2:3b";
     if (key === "openrouter" && !model.includes("/")) body.model = "deepseek/deepseek-v4-flash:nitro";
     if (body.model) {
       setModel(body.model);
@@ -206,6 +257,52 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
                   ))}
                 </select>
               )}
+              {endpoint === "ollama" && (
+                <div className="mt-2.5">
+                  <p className="text-[12px] font-medium text-stone-700">Ollama server</p>
+                  <div className="mt-1 flex items-center gap-2">
+                    <input
+                      value={ollamaUrl}
+                      onChange={(e) => {
+                        setOllamaUrl(e.target.value);
+                        setUrlErr(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") saveOllamaUrl();
+                      }}
+                      spellCheck={false}
+                      placeholder="192.168.86.237:11434"
+                      className="min-w-0 flex-1 rounded-lg border border-stone-200 bg-white px-3 py-1.5 font-mono text-[12px] text-stone-700 outline-none transition focus:border-accent-600/50"
+                    />
+                    <button
+                      onClick={() => saveOllamaUrl()}
+                      disabled={savingUrl || !ollamaUrl.trim()}
+                      className="shrink-0 rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-[13px] font-medium text-stone-700 transition hover:border-stone-300 active:scale-[0.98] disabled:opacity-50"
+                    >
+                      {savingUrl ? "Saving…" : "Save"}
+                    </button>
+                  </div>
+                  {urlErr ? (
+                    <p className="mt-1 text-xs text-rose-500">{urlErr}</p>
+                  ) : urlStatus ? (
+                    <p className={`mt-1 text-xs ${urlStatus.kind === "ok" ? "text-emerald-600" : "text-amber-600"}`}>
+                      {urlStatus.text}
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-xs text-stone-400">
+                      Run on Ollama on this Mac or another on your network — enter the address (e.g.{" "}
+                      <span className="font-mono text-[11px]">192.168.86.237:11434</span>) and Errand fills in the rest.
+                    </p>
+                  )}
+                  <button
+                    onClick={resetOllamaUrl}
+                    disabled={savingUrl}
+                    className="mt-1.5 text-[11px] text-stone-400 underline-offset-2 transition hover:text-stone-600 hover:underline disabled:opacity-50"
+                  >
+                    Reset to localhost
+                  </button>
+                </div>
+              )}
               <div className="mt-2 space-y-2">
                 {endpoint === "openrouter" && (
                   <select
@@ -224,6 +321,24 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
                     {!presets.some((p) => p.id === model) && model && <option value="__custom">Custom: {model}</option>}
                   </select>
                 )}
+                {endpoint === "ollama" && ollamaModels.length > 0 && (
+                  <select
+                    value={ollamaModels.includes(model) ? model : "__custom"}
+                    onChange={(e) => {
+                      if (e.target.value !== "__custom") chooseModel(e.target.value);
+                    }}
+                    disabled={savingModel}
+                    aria-label="Model detected on the Ollama server"
+                    className="w-full rounded-lg border border-stone-200 bg-white px-3 py-2 font-mono text-[12px] text-stone-800 outline-none transition focus:border-accent-600/50 disabled:opacity-60"
+                  >
+                    {ollamaModels.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                    {!ollamaModels.includes(model) && model && <option value="__custom">Custom: {model}</option>}
+                  </select>
+                )}
                 <div className="flex items-center gap-2">
                   <input
                     value={customModel}
@@ -232,7 +347,7 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
                       if (e.key === "Enter") chooseModel(customModel);
                     }}
                     spellCheck={false}
-                    placeholder={endpoint === "ollama" ? "Ollama model, e.g. llama3.2:3b" : "or any OpenRouter model id"}
+                    placeholder={endpoint === "ollama" ? "or type a model tag, e.g. llama3.2:3b" : "or any OpenRouter model id"}
                     className="min-w-0 flex-1 rounded-lg border border-stone-200 bg-white px-3 py-1.5 font-mono text-[12px] text-stone-700 outline-none transition focus:border-accent-600/50"
                   />
                   <button
