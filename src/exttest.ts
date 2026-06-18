@@ -26,12 +26,14 @@ async function main() {
 
   console.log("\n== a fresh connection supersedes the old + fails its pendings ==");
   let bClosed = false;
-  registerStream(fakeController(() => (bClosed = true)), "B");
+  let bCleanup = false;
+  registerStream(fakeController(() => (bClosed = true)), "B", () => (bCleanup = true));
   const parkedB = sendCommand("read", {});
   registerStream(fakeController(), "C"); // supersede B
   const rB = await settledFast(parkedB);
   check("superseded connection's pending failed fast", rB.ok === false && /reconnect/.test(rB.error ?? ""), JSON.stringify(rB));
   check("old controller (B) was closed on supersede", bClosed);
+  check("old route cleanup (onClose) ran on supersede (heartbeat stops now, not in 10s)", bCleanup);
   check("still connected (as the new stream C)", isExtConnected());
   unregisterStream("B"); // stale id — must be ignored
   check("stale unregister(B) ignored", isExtConnected());

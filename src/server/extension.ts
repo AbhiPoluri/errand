@@ -16,7 +16,7 @@ interface Pending {
 type Controller = ReadableStreamDefaultController<Uint8Array>;
 
 const g = globalThis as unknown as {
-  __extStream?: { controller?: Controller; id?: string };
+  __extStream?: { controller?: Controller; id?: string; onClose?: () => void };
   __extPending?: Map<string, Pending>;
 };
 const stream = (g.__extStream ??= {});
@@ -37,12 +37,18 @@ function failAllPending(error: string): void {
   pending.clear();
 }
 
-// Called by the SSE route when the extension connects / disconnects.
-export function registerStream(controller: Controller, id: string): void {
-  // A fresh connection supersedes any prior one: fail its in-flight commands and close the old
-  // controller so they don't hang waiting on a stream that's about to be replaced.
+// Called by the SSE route when the extension connects / disconnects. `onClose` lets the route
+// tear down its own resources (the heartbeat interval) the instant it's superseded.
+export function registerStream(controller: Controller, id: string, onClose?: () => void): void {
+  // A fresh connection supersedes any prior one: fail its in-flight commands, run the OLD route's
+  // cleanup (so its heartbeat stops NOW, not on its next ~10s tick), and close the old controller.
   if (stream.controller && stream.id !== id) {
     failAllPending("the browser reconnected");
+    try {
+      stream.onClose?.();
+    } catch {
+      /* best effort */
+    }
     try {
       stream.controller.close();
     } catch {
@@ -51,11 +57,13 @@ export function registerStream(controller: Controller, id: string): void {
   }
   stream.controller = controller;
   stream.id = id;
+  stream.onClose = onClose;
 }
 export function unregisterStream(id: string): void {
   if (stream.id === id) {
     stream.controller = undefined;
     stream.id = undefined;
+    stream.onClose = undefined;
     // Resolve parked commands immediately with the true reason rather than the misleading
     // "took too long" 30s later (tab close, Chrome suspend, laptop sleep are routine).
     failAllPending("the browser disconnected");
