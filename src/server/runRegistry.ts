@@ -132,12 +132,19 @@ async function buildSystemPrompt(query: string): Promise<string> {
 function attachPersistence(entry: RunEntry): void {
   entry.sink.subscribe((e) => {
     if (entry.deleted) return; // deleted mid-run — don't re-add its in-flight events to the DB
-    if (e.type !== "message.delta" && e.type !== "thinking.delta") store.appendEvent(entry.runId, e);
-    if (e.type === "run.finished") {
-      store.setStatus(entry.runId, "done");
-      store.setChangeCount(entry.runId, e.changes.length);
-    } else if (e.type === "run.error") {
-      store.setStatus(entry.runId, "stopped");
+    // A transient DB hiccup (locked by a second process, disk full) must degrade to "we didn't
+    // save that event", not crash the run. WebSink.emit swallows subscriber throws, but persist
+    // explicitly so a write failure can never interrupt the live stream or mark a run wrong.
+    try {
+      if (e.type !== "message.delta" && e.type !== "thinking.delta") store.appendEvent(entry.runId, e);
+      if (e.type === "run.finished") {
+        store.setStatus(entry.runId, "done");
+        store.setChangeCount(entry.runId, e.changes.length);
+      } else if (e.type === "run.error") {
+        store.setStatus(entry.runId, "stopped");
+      }
+    } catch (err) {
+      console.warn(`[errand] failed to persist ${e.type} for run ${entry.runId} (continuing):`, err);
     }
   });
 }
@@ -150,8 +157,15 @@ function runTurn(entry: RunEntry, message: string): void {
     .catch(() => {})
     .finally(() => {
       entry.busy = false;
-      store.setMessages(entry.runId, entry.session.messages); // durable conversation
-      maybeDream(); // reflect after the task settles (if dreaming is on)
+      // Guard the post-turn writes: a throw in this .finally would become an unhandled
+      // rejection that can take down the Next worker mid-errand. Saving the conversation or
+      // kicking off dreaming failing should be silent, not fatal.
+      try {
+        store.setMessages(entry.runId, entry.session.messages); // durable conversation
+        maybeDream(); // reflect after the task settles (if dreaming is on)
+      } catch (err) {
+        console.warn(`[errand] post-turn persistence failed for run ${entry.runId} (continuing):`, err);
+      }
     });
 }
 
