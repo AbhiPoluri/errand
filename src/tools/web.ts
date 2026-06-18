@@ -8,6 +8,48 @@ import type { Tool, ToolResult } from "./index.ts";
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
 const FETCH_CAP = 12_000;
+const RAW_CAP = 262_144; // 256KB — most raw bytes we'll pull off the wire before capping
+const WEB_TIMEOUT_MS = Number(process.env.WEB_TIMEOUT_MS) || 15_000;
+
+// A signal that aborts on the caller's cancel OR after a deadline. web_fetch/web_search run
+// autonomously on arbitrary URLs; without this a host that completes the handshake then trickles
+// (or never sends) the body would hang the tool until the whole run is cancelled.
+export function withDeadline(signal: AbortSignal, ms = WEB_TIMEOUT_MS): AbortSignal {
+  return AbortSignal.any([signal, AbortSignal.timeout(ms)]);
+}
+
+// Read a response body with a hard byte cap, STREAMING so a multi-GB / chunked-forever response is
+// never fully buffered (res.text() would buffer it all before we slice). Cancels the reader once we
+// have enough. Falls back to text() when there's no readable stream (e.g. a test fake).
+export async function readCapped(
+  res: { body?: ReadableStream<Uint8Array> | null; text(): Promise<string> },
+  maxBytes = RAW_CAP,
+): Promise<string> {
+  const body = res.body;
+  if (!body || typeof (body as any).getReader !== "function") {
+    return (await res.text()).slice(0, maxBytes);
+  }
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (total < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        chunks.push(value);
+        total += value.length;
+      }
+    }
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      /* already closed */
+    }
+  }
+  return Buffer.concat(chunks).subarray(0, maxBytes).toString("utf8");
+}
 
 function decodeEntities(s: string): string {
   return s
@@ -93,9 +135,9 @@ export const webSearch: Tool<{ query: string }> = {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": UA },
         body: new URLSearchParams({ q: a.query }).toString(),
-        signal: ctx.signal,
+        signal: withDeadline(ctx.signal),
       });
-      const html = await res.text();
+      const html = await readCapped(res);
       const results = parseDdgResults(html);
       if (results.length === 0) return { ok: false, error: "no_results", summary: "I couldn't find anything for that." };
       return { ok: true, data: { results } };
@@ -126,15 +168,15 @@ export const webFetch: Tool<{ url: string }> = {
   summarize: (r) => (r.ok ? "Read the page." : "I couldn't open that page."),
   run: async (a, ctx): Promise<ToolResult> => {
     try {
-      const res = await fetch(a.url, { headers: { "User-Agent": UA }, signal: ctx.signal });
+      const res = await fetch(a.url, { headers: { "User-Agent": UA }, signal: withDeadline(ctx.signal) });
       if (!res.ok) return { ok: false, error: `http_${res.status}`, summary: "That page didn't load." };
       const ct = res.headers.get("content-type") ?? "";
       if (!ct.includes("html") && !ct.includes("text")) {
         return { ok: false, error: "not_text", summary: "That link isn't a readable web page." };
       }
-      const html = await res.text();
-      const text = stripTags(html).slice(0, FETCH_CAP);
-      return { ok: true, data: { url: a.url, text }, bytes: html.length };
+      const raw = await readCapped(res);
+      const text = stripTags(raw).slice(0, FETCH_CAP);
+      return { ok: true, data: { url: a.url, text }, bytes: raw.length };
     } catch (e: any) {
       return { ok: false, error: String(e?.message ?? e) };
     }

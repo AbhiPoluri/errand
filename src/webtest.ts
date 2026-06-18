@@ -2,7 +2,7 @@
 // HTML fragment with an AD row (a result__a link with NO result__snippet) wedged between two
 // real results — the exact case that made the old flat-array zip drift snippets onto the wrong
 // result. Asserts each result keeps ITS OWN snippet and the ad gets "".
-import { parseDdgResults } from "./tools/web.ts";
+import { parseDdgResults, readCapped, withDeadline } from "./tools/web.ts";
 
 let failures = 0;
 const check = (name: string, cond: boolean, detail = "") => {
@@ -47,6 +47,27 @@ check("result 2 url unwrapped", results[2]?.url === "https://example.com/two", r
 // Empty / junk HTML must not throw and returns no results.
 check("empty html -> no results, no throw", parseDdgResults("<html></html>").length === 0);
 check("cap is respected", parseDdgResults(html, 1).length === 1);
+
+console.log("\n== readCapped streams + caps + cancels ==");
+let cancelled = false;
+const bigStream = new ReadableStream<Uint8Array>({
+  pull(c) {
+    c.enqueue(new Uint8Array(1000)); // emit forever
+  },
+  cancel() {
+    cancelled = true;
+  },
+});
+const capped = await readCapped({ body: bigStream, text: async () => "" }, 5000);
+check("caps the body at maxBytes", capped.length <= 5000, `${capped.length}`);
+check("cancels the reader once it has enough (no infinite read)", cancelled);
+const fb = await readCapped({ text: async () => "x".repeat(10) }, 4);
+check("falls back to text() + slices when there's no stream", fb === "xxxx", fb);
+
+console.log("\n== withDeadline aborts on a stalled host ==");
+const sig = withDeadline(new AbortController().signal, 10);
+await new Promise((r) => setTimeout(r, 40));
+check("signal aborts after its deadline", sig.aborted);
 
 console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILED"}`);
 process.exit(failures === 0 ? 0 : 1);
