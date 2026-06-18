@@ -77,7 +77,11 @@ export class AgentRunner {
       seq: this.seq++,
       ts: Date.now(),
     };
-    this.o.logger.log("event", event);
+    // Skip the per-token deltas: Logger.log is a synchronous appendFileSync, so logging every
+    // streamed token serializes the stream behind disk latency. The final text is reconstructed
+    // from message.completed, so per-delta logs carry no diagnostic value. Structural events
+    // (tool calls, approvals, errors, usage) are still logged.
+    if (event.type !== "message.delta" && event.type !== "thinking.delta") this.o.logger.log("event", event);
     await this.o.sink.emit(event);
   }
 
@@ -253,23 +257,6 @@ export class AgentRunner {
 
           const { tool, args, description } = prep;
 
-          // Stuck-detection: a non-repeatable action (a click/type/file-op) repeated with
-          // the exact same args many times means the model is looping — stop, don't churn.
-          if (!REPEATABLE.has(tool.name)) {
-            const sig = `${tool.name}:${JSON.stringify(args)}`;
-            const n = (callCounts.get(sig) ?? 0) + 1;
-            callCounts.set(sig, n);
-            if (n >= STUCK_THRESHOLD) {
-              await this.emit({
-                type: "run.error",
-                kind: "max_iterations",
-                userMessage: "I kept trying the same step without getting anywhere, so I paused. Want me to try a different way?",
-                recoverable: true,
-              });
-              return "";
-            }
-          }
-
           await this.emit({
             type: "tool.proposed",
             callId,
@@ -370,6 +357,33 @@ export class AgentRunner {
                 : result,
             ),
           );
+
+          // Stuck-detection (post-run, not at prepare-time). Only CONSECUTIVE genuine failures
+          // of the same non-repeatable action count as "stuck". A success resets the counter, so
+          // legitimately repeating an idempotent op (e.g. re-saving after a deny→approve, or the
+          // same write to several files) never aborts. Denied/expired/cancelled approvals and
+          // preflight failures `continue` above and never reach here, so the user merely pushing
+          // back can't trip it. Uncertain permanent actions are excluded (we already tell the
+          // model not to retry them).
+          if (!REPEATABLE.has(tool.name)) {
+            const sig = `${tool.name}:${JSON.stringify(args)}`;
+            if (result.ok) {
+              callCounts.set(sig, 0);
+            } else if (!uncertain) {
+              const n = (callCounts.get(sig) ?? 0) + 1;
+              callCounts.set(sig, n);
+              if (n >= STUCK_THRESHOLD) {
+                await this.emit({
+                  type: "run.error",
+                  kind: "max_iterations",
+                  userMessage:
+                    "I kept trying the same step without getting anywhere, so I paused. Want me to try a different way?",
+                  recoverable: true,
+                });
+                return "";
+              }
+            }
+          }
         }
       } finally {
         // INVARIANT: backfill any tool_call left without a result.
