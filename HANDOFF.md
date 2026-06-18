@@ -1,15 +1,21 @@
-# Errand — Session Handoff (updated 2026-06-18, after the overnight + morning session)
+# Errand — Session Handoff (updated 2026-06-18, after the overnight merge + the Ollama-LAN feature)
 
 > Read this first to resume. `PLAN.md` is the full living spec/changelog; `MORNING-REPORT.md` +
 > `NIGHT-LOG.md` are the per-item log of the session summarized here. This block is the short
 > "where we are + what's next."
 
-## ⚠️ Where we are: a large UNMERGED branch
-**All recent work is on `overnight-2026-06-18` (~57 commits, off `main` @ f21ec17 — NOT merged, NOT
-pushed). `main` is untouched.** Resume with `git checkout overnight-2026-06-18`; review with
-`git diff main..HEAD`. The local dev server on :3200 has been HMR-running this branch.
+## Where we are: merged to `main` + the Ollama-LAN feature on top
+**The overnight branch is MERGED into `main` (merge commit `9d23a24`); work continues on `main`
+directly.** The latest addition (commit `401f3b6`, on `main`) is a **configurable Ollama endpoint** —
+Errand can now run on Ollama on another machine on your network (e.g. a Mac Studio at
+`http://192.168.86.237:11434/v1`), not just localhost: persisted base URL used for chat + model
+detection, a pre-flight reachability probe (unreachable host fails in ~2.5s, not a ~120s hang),
+forgiving/path-preserving URL parsing, and a **dropdown of detected models** in Settings with live
+"Connected — N models found" feedback + reset-to-localhost. 8 adversarial-review findings fixed; new
+`endpoint:test` (21 assertions). See PLAN §11 (top entry). ⚠️ `errand.db` is currently set to
+**Ollama / qwen3.5:35b-a3b @ the Mac Studio** — switch back to OpenRouter in Settings for cloud use.
 
-**What's in it — 53 improvements across 4 autonomous discovery rounds, each adversarially reviewed
+**What the merged overnight branch brought — 53 improvements across 4 autonomous discovery rounds, each adversarially reviewed
 (4 review passes, ~22 findings fixed incl. 2 high-sev I'd introduced), plus morning follow-ups:**
 - **Trust/correctness:** Undo survives restart (persisted journal manifest + new
   `src/server/journalRestore.ts`); delete same-name collision fix; stuck-detection rewrite (counts
@@ -38,19 +44,20 @@ MORNING-REPORT.md and are low/self-healing).
 from-scratch ZIP/OOXML *writers*. Reading is shipped + safe; each has a round-trip-through-the-reader
 test plan ready to make it safe when reviewed.
 
-**Suggested next (your call):** merge the branch → then v8 Gmail (first OAuth pack — needs your Google
-Cloud project + consent) / v9 Calendar; hosting-grade durability (resume mid-flight, multi-worker — a
-core-run-state refactor, too big to land unreviewed); the two deferred writers; or wire the detected
-Ollama list into Settings' free-text model field too.
+**Suggested next (your call):** v8 Gmail (first OAuth pack — needs your Google Cloud project +
+consent) / v9 Calendar; hosting-grade durability (resume mid-flight, multi-worker — a core-run-state
+refactor, too big to land unreviewed); or the two deferred ZIP/OOXML writers (review before shipping).
+(Branch merge ✅ and wiring the detected-Ollama list into Settings ✅ are both done.)
 
 ## Resume / verify quickly
 - `npm run web` → http://localhost:3200. Extension must be loaded for browser tasks (green dot on Home).
 - Offline tests (all green): `npm run loop:test`, `web:test`, `fileops:test`, `journal:test`,
   `embed:test`, `store:test`, `websink:test`, `ext:test`, `bash:test`, `clickrisk:test`,
-  `restart:test`, `cap:test`. (`mem:test` needs the OpenRouter key; `doc:test`/`ocr:test` are slower.)
-- ⚠️ Model/endpoint is now switchable from the **header pill** (OpenRouter ↔ Ollama, with installed
-  local models detected). It was toggled during testing — confirm the pill/Settings shows the model
-  you want before a real run.
+  `restart:test`, `cap:test`, `endpoint:test`. (`mem:test` needs the OpenRouter key; `doc:test`/`ocr:test` are slower.)
+- ⚠️ Model/endpoint is switchable from the **header pill** AND Settings → Model (OpenRouter ↔ Ollama;
+  Ollama can point at localhost OR another machine on the LAN via the "Ollama server" URL field, with
+  detected models in a dropdown). It's currently on Ollama @ the Mac Studio — confirm the model/endpoint
+  shows what you want before a real run (switch to OpenRouter for cloud).
 
 ## What Errand is
 A from-scratch TypeScript AI agent harness with a calm consumer UI for **non-technical
