@@ -52,6 +52,25 @@ function toolCallResp(name: string, args: unknown, callId: string) {
 function textResp(text: string) {
   return { choices: [{ message: { role: "assistant", content: text }, finish_reason: "stop" }], usage: null };
 }
+function finishResp(reason: string, text = "") {
+  return { choices: [{ message: { role: "assistant", content: text }, finish_reason: reason }], usage: null };
+}
+// A tool call whose arguments string is passed through verbatim (to script malformed JSON).
+function rawToolCallResp(name: string, rawArgs: string, callId: string) {
+  return {
+    choices: [
+      {
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [{ id: callId, type: "function", function: { name, arguments: rawArgs } }],
+        },
+        finish_reason: "tool_calls",
+      },
+    ],
+    usage: null,
+  };
+}
 
 // Stub client: create() returns responder(callIndex). Ignores the request args entirely.
 function stubClient(responder: (i: number) => any): OpenAI {
@@ -150,10 +169,59 @@ async function testDeniedApprovalsDoNotAbort() {
   check("messages well-formed after 6 denials", wf.ok, wf.detail);
 }
 
+async function testLengthExit() {
+  console.log("\n== 4. finish_reason=length -> run.error kind=length, not recoverable ==");
+  const registry = new Registry().register(stubTool("do_thing", { result: { ok: true } }));
+  const { runner, tap } = makeRunner(registry, () => finishResp("length", "a partial answer"));
+  await runner.send("write something enormous", new AbortController().signal);
+  const err = tap.events.find((e) => e.type === "run.error");
+  check("run.error has kind=length", err?.type === "run.error" && err.kind === "length");
+  check("length is marked NOT recoverable", err?.type === "run.error" && err.recoverable === false);
+  check("no normal finish was reported", !tap.events.some((e) => e.type === "run.finished"));
+}
+
+async function testContentFilterExit() {
+  console.log("\n== 5. finish_reason=content_filter -> run.error kind=content_filter ==");
+  const registry = new Registry().register(stubTool("do_thing", { result: { ok: true } }));
+  const { runner, tap } = makeRunner(registry, () => finishResp("content_filter"));
+  await runner.send("something disallowed", new AbortController().signal);
+  const err = tap.events.find((e) => e.type === "run.error");
+  check("run.error has kind=content_filter", err?.type === "run.error" && err.kind === "content_filter");
+  check("no normal finish was reported", !tap.events.some((e) => e.type === "run.finished"));
+}
+
+async function testUnknownToolStaysWellFormed() {
+  console.log("\n== 6. unknown tool name -> result still appended, messages well-formed ==");
+  const registry = new Registry().register(stubTool("do_thing", { result: { ok: true } }));
+  const { runner, session, tap } = makeRunner(registry, (i) =>
+    i === 0 ? toolCallResp("no_such_tool", { x: 1 }, crypto.randomUUID()) : textResp("recovered"),
+  );
+  await runner.send("call a tool that doesn't exist", new AbortController().signal);
+  const wf = wellFormed(session.messages as Msg[]);
+  check("messages well-formed (the unknown tool_call got a result)", wf.ok, wf.detail);
+  check("run recovered and finished", tap.events.some((e) => e.type === "run.finished"));
+}
+
+async function testInvalidArgsStaysWellFormed() {
+  console.log("\n== 7. invalid JSON tool args -> result still appended, messages well-formed ==");
+  const registry = new Registry().register(stubTool("do_thing", { result: { ok: true } }));
+  const { runner, session, tap } = makeRunner(registry, (i) =>
+    i === 0 ? rawToolCallResp("do_thing", "{not valid json", crypto.randomUUID()) : textResp("recovered"),
+  );
+  await runner.send("call a tool with broken args", new AbortController().signal);
+  const wf = wellFormed(session.messages as Msg[]);
+  check("messages well-formed (the invalid-args tool_call got a result)", wf.ok, wf.detail);
+  check("run recovered and finished", tap.events.some((e) => e.type === "run.finished"));
+}
+
 async function main() {
   await testFailingActionAborts();
   await testSucceedingActionDoesNotAbort();
   await testDeniedApprovalsDoNotAbort();
+  await testLengthExit();
+  await testContentFilterExit();
+  await testUnknownToolStaysWellFormed();
+  await testInvalidArgsStaysWellFormed();
   console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILED"}`);
   process.exit(failures === 0 ? 0 : 1);
 }
