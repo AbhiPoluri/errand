@@ -87,7 +87,27 @@ UI screenshot-verified (Home desktop+375px, Settings open + Esc-close, clay focu
 - **LEFT low** webSink reconnect can gap >400 deltas mid-reply — self-heals via message.completed.
 - **LEFT low** overwrite-snapshot-fail → Undo shown but skips; undoSentence already reports it honestly.
 
-See `MORNING-REPORT.md` for the full summary. 19 commits, all green.
+See `MORNING-REPORT.md` for the full summary.
+
+### ROUND 2 — fresh discovery + 14 more items shipped ✅
+After the backlog + review, ran a 2nd discovery pass (aware of round-1 changes; promoting items
+deferred for lack of test coverage now that the suites exist). All 14 shipped + verified:
+1. web_fetch/web_search per-request timeout + streamed bounded body (no hang/OOM). ✅ web:test
+2. extension: fail parked commands immediately on disconnect/reconnect (not 30s). ✅ ext:test (new)
+3. find_duplicates tool (backs the duplicate-finder chip). ✅ fileops:test
+4. capability on/off toggles in Settings (transparency). ✅ cap:test + screenshot
+5. loop: idle-stream watchdog + explicit client timeout (no forever-hang). ✅ loop:test
+6. loop: bounded retry-with-backoff for transient transport failures (pre-output only). ✅ loop:test
+7. index the lower(text) dedup lookups (no full scan). ✅ store:test (EXPLAIN)
+8. dream: kill the listMemories() N+1. ✅ store/mem:test
+9. read-only "I didn't change any files" confirmation. ✅ tsc/review
+10. run-level start-failure Try-again button. ✅ tsc/review
+11. shared discriminated OpManifest union (typed manifests). ✅ tsc + journal/fileops:test
+12. ToolResult<D> generic — removed as-any casts in files/web summarizers. ✅ tsc + sweep
+13. Recently search + change-count badges. ✅ screenshot
+14. typed EmbedClient seam. ✅ embed:test
+New suite: `ext:test`. 31 commits total. Full sweep (loop/web/fileops/journal/embed/store/websink/
+ext/restart/cap) ALL PASS, tsc clean.
 
 ## Parked / needs Abhiram
 _(none yet)_

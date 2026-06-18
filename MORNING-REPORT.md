@@ -4,11 +4,13 @@ Good morning. I worked autonomously overnight on a dedicated branch. Everything 
 locally, **nothing was pushed and `main` is untouched** — review the diff and merge what you like.
 
 ## TL;DR
-- **Branch:** `overnight-2026-06-18` (off `main` @ f21ec17), **19 commits**, working tree clean.
-- **Shipped all 22 items** from an 8-lens discovery pass (60 candidates → 22 ranked, autonomous-safe).
-- **Then adversarially reviewed my own work** (15-agent workflow): 9 real findings, **2 high** — both
-  fixed — 5 low fixed, 2 low consciously left (noted below).
-- `tsc` clean; **9 offline test suites green** every commit; **8 new test suites added**.
+- **Branch:** `overnight-2026-06-18` (off `main` @ f21ec17), **31 commits**, working tree clean.
+- **Round 1:** shipped all 22 items from an 8-lens discovery pass (60 candidates → 22 ranked).
+- **Adversarial review** of round 1 (15-agent workflow): 9 real findings, **2 high — both fixed**,
+  5 low fixed, 2 low consciously left (noted below).
+- **Round 2:** a second discovery pass → **14 more items** shipped (resilience timeouts/retries,
+  find_duplicates, capability toggles, perf indexes, type-safety, more UX). All verified.
+- `tsc` clean every commit; **10 offline test suites green**; **9 new test suites added**.
 - UI changes screenshot-verified at desktop + 375px.
 
 ## Review it
@@ -73,6 +75,24 @@ Ran a fan-out review over the riskiest changes, with each finding independently 
   `message.completed` lands (carries full text); persisted transcript is never affected.
 - **LEFT (low, by choice)** If an overwrite's snapshot write fails, the post-restart Undo is shown but
   skips — `undoSentence` already reports "1 couldn't be restored", so the user isn't misled.
+
+## Round 2 — 14 more (after the review)
+A second discovery pass, aware of round-1's changes and promoting items it had deferred for lack of
+test coverage (now that the suites exist):
+- **Resilience:** web_fetch/web_search now have a per-request timeout + streamed bounded body (no
+  hang, no OOM); the loop has an idle-stream watchdog + explicit 120s client timeout (a stalled
+  stream no longer hangs the run forever) and bounded retry-with-backoff for transient transport
+  blips (only before any output, never duplicating); the extension fails parked commands instantly
+  on disconnect instead of after 30s.
+- **New capability:** `find_duplicates` (backs the duplicate-finder chip); on/off **capability
+  toggles** in Settings (see + limit what the agent can do).
+- **Perf:** expression indexes on the `lower(text)` dedup lookups; killed a `listMemories()` N+1 in
+  dreaming.
+- **UX:** read-only "I didn't change any files" confirmation; Try-again on a run-level start
+  failure; Recently search + per-row change-count badges.
+- **Type-safety:** discriminated `OpManifest` union (typed manifests, exhaustive reconstruct);
+  `ToolResult<D>` generic (removed the `as any` in tool summarizers); typed `EmbedClient` seam.
+- New `ext:test`; everything tsc-clean + suite-verified.
 
 ## Suggested next (your call)
 - The two "left" items above, if you want them airtight.
