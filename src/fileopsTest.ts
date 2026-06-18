@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Journal } from "./journal.ts";
 import { Registry, type ToolContext } from "./tools/index.ts";
-import { fileTools, renameFile, folderSummary, findDuplicates, deleteFile } from "./tools/files.ts";
+import { fileTools, renameFile, moveFile, folderSummary, findDuplicates, deleteFile } from "./tools/files.ts";
 
 let failures = 0;
 const check = (name: string, cond: boolean, detail = "") => {
@@ -179,6 +179,7 @@ function testRegistryHygiene() {
   const names = reg.schemas().map((s) => s.function.name);
   check("rename_file is registered", names.includes("rename_file"));
   check("folder_summary is registered", names.includes("folder_summary"));
+  check("move_file points renames at rename_file (no verb overlap)", /use rename_file/.test(moveFile.modelDescription));
   check("every file-tool name is unique", new Set(names).size === names.length, names.join(", "));
 }
 

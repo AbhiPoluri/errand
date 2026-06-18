@@ -124,9 +124,14 @@ function currentClient() {
 // `query` is the run's first message — used to retrieve only the memories relevant to THIS
 // task (embedding-ranked), instead of dumping every memory into the prompt.
 async function buildSystemPrompt(query: string): Promise<string> {
+  // State today's date every run: a get_date tool exists, but the model only calls it if it
+  // reasons to — for common asks ("files from last week", "what's due this month", "as of today")
+  // a cheap/local model anchors on its training cutoff and answers wrongly without ever calling it.
+  const dateLine = `Today is ${new Date().toDateString()}. Use this for anything time-related; only check the exact clock time with a tool when you truly need it.`;
+  const base = `${dateLine}\n\n${SYSTEM_PROMPT}`;
   const mems = await store.relevantMemories(query);
-  if (!mems) return SYSTEM_PROMPT;
-  return `${SYSTEM_PROMPT}\n\nWhat you remember about this person (use it naturally; never recite it back):\n${mems}`;
+  if (!mems) return base;
+  return `${base}\n\nWhat you remember about this person (use it naturally; never recite it back):\n${mems}`;
 }
 
 // Persist events to the DB; update status/changeCount on terminal events. Per-token streaming

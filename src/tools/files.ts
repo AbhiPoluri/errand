@@ -269,7 +269,8 @@ export const makeFolder: Tool<{ path: string }, { path: string }> = {
 // ---- move (gated, reversible) ----
 export const moveFile: Tool<{ from: string; to: string }, { from: string; to: string }> = {
   name: "move_file",
-  modelDescription: "Move or rename a file or folder. Refuses if the destination already exists.",
+  modelDescription:
+    "Move a file or folder to a different folder. To rename a file or folder in place (same folder, new name), use rename_file instead. Refuses if the destination already exists.",
   jsonSchema: {
     type: "object",
     additionalProperties: false,

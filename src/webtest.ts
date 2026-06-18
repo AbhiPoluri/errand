@@ -2,7 +2,8 @@
 // HTML fragment with an AD row (a result__a link with NO result__snippet) wedged between two
 // real results — the exact case that made the old flat-array zip drift snippets onto the wrong
 // result. Asserts each result keeps ITS OWN snippet and the ad gets "".
-import { parseDdgResults, readCapped, withDeadline } from "./tools/web.ts";
+import { parseDdgResults, readCapped, withDeadline, webSearch } from "./tools/web.ts";
+import { SYSTEM_PROMPT } from "./prompt.ts";
 
 let failures = 0;
 const check = (name: string, cond: boolean, detail = "") => {
@@ -78,6 +79,10 @@ console.log("\n== withDeadline aborts on a stalled host ==");
 const sig = withDeadline(new AbortController().signal, 10);
 await new Promise((r) => setTimeout(r, 40));
 check("signal aborts after its deadline", sig.aborted);
+
+console.log("\n== research guidance steers toward opening + citing a source ==");
+check("web_search description tells the model to open a result with web_fetch", /web_fetch/.test(webSearch.modelDescription));
+check("system prompt asks the model to name which site a web answer came from", /which site it came from/.test(SYSTEM_PROMPT));
 
 console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILED"}`);
 process.exit(failures === 0 ? 0 : 1);

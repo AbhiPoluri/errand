@@ -122,7 +122,8 @@ export function parseDdgResults(html: string, cap = 8): SearchResult[] {
 
 export const webSearch: Tool<{ query: string }, { results: SearchResult[] }> = {
   name: "web_search",
-  modelDescription: "Search the web and get a list of result titles, links, and snippets. Read-only.",
+  modelDescription:
+    "Search the web and get result titles, links, and snippets. Read-only. The snippets are only leads — to answer a factual question, open the most relevant result with web_fetch and base your answer on what the page actually says.",
   jsonSchema: {
     type: "object",
     additionalProperties: false,
