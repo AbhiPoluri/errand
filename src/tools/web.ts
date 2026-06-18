@@ -154,7 +154,8 @@ export const webSearch: Tool<{ query: string }, { results: SearchResult[] }> = {
 
 export const webFetch: Tool<{ url: string }, { url: string; text: string }> = {
   name: "web_fetch",
-  modelDescription: "Open a web page and read its text content. Read-only. Give a full https URL.",
+  modelDescription:
+    "Open a web page and read its text content. Read-only. Give a full https URL. If it won't open, say so plainly — don't fall back to answering from your own memory as if you'd read it.",
   jsonSchema: {
     type: "object",
     additionalProperties: false,

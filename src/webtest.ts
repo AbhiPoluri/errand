@@ -2,7 +2,7 @@
 // HTML fragment with an AD row (a result__a link with NO result__snippet) wedged between two
 // real results — the exact case that made the old flat-array zip drift snippets onto the wrong
 // result. Asserts each result keeps ITS OWN snippet and the ad gets "".
-import { parseDdgResults, readCapped, withDeadline, webSearch } from "./tools/web.ts";
+import { parseDdgResults, readCapped, withDeadline, webSearch, webFetch } from "./tools/web.ts";
 import { SYSTEM_PROMPT } from "./prompt.ts";
 
 let failures = 0;
@@ -83,6 +83,8 @@ check("signal aborts after its deadline", sig.aborted);
 console.log("\n== research guidance steers toward opening + citing a source ==");
 check("web_search description tells the model to open a result with web_fetch", /web_fetch/.test(webSearch.modelDescription));
 check("system prompt asks the model to name which site a web answer came from", /which site it came from/.test(SYSTEM_PROMPT));
+check("prompt forbids answering from memory when a page won't open", /don't answer the question from your own memory/.test(SYSTEM_PROMPT));
+check("web_fetch description warns against guessing on failure", /don't fall back to answering from your own memory/.test(webFetch.modelDescription));
 
 console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILED"}`);
 process.exit(failures === 0 ? 0 : 1);
