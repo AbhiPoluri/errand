@@ -161,6 +161,7 @@ function patch(steps: Step[], callId: string, p: Partial<Step>): Step[] {
 export function useRun() {
   const [state, setState] = useState<RunState>(EMPTY);
   const esRef = useRef<EventSource | null>(null);
+  const lastStart = useRef<{ message: string; roots?: string[] } | null>(null);
 
   const openStream = useCallback((runId: string) => {
     esRef.current?.close();
@@ -178,6 +179,7 @@ export function useRun() {
 
   const start = useCallback(
     async (message: string, roots?: string[]) => {
+      lastStart.current = { message, roots }; // remembered so a failed start can be retried
       setState({ ...EMPTY, phase: "running", title: message, statusLine: "Getting started…", thinking: true });
       const res = await fetch("/api/runs", {
         method: "POST",
@@ -271,6 +273,12 @@ export function useRun() {
     setState(EMPTY);
   }, []);
 
+  // Re-run the original request after a run-level start failure (bad model, no key, Ollama down).
+  const retryStart = useCallback(() => {
+    const last = lastStart.current;
+    if (last) start(last.message, last.roots);
+  }, [start]);
+
   // keep a ref of the latest state for the callbacks above
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -287,5 +295,6 @@ export function useRun() {
     followUp,
     undo,
     reset,
+    retryStart,
   };
 }

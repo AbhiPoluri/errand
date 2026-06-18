@@ -152,6 +152,7 @@ export function RunView(props: {
   onFollowUp: (m: string) => void;
   onUndo: () => void;
   onReset: () => void;
+  onRetryStart: () => void;
 }) {
   const { state } = props;
   const running = state.phase === "running";
@@ -371,6 +372,13 @@ export function RunView(props: {
         <div className="mt-4 rounded-xl border border-brick-200 bg-brick-50 p-6">
           <p className="text-sm font-semibold text-brick-700">A small snag</p>
           <p className="mt-2 text-stone-900">{state.problem}</p>
+          {/* A start failure (bad model, no key, Ollama down) shouldn't be a dead end — let them retry. */}
+          <button
+            onClick={props.onRetryStart}
+            className="mt-4 rounded-xl border border-brick-300/70 bg-white px-4 py-2.5 text-sm font-medium text-brick-700 transition hover:border-brick-400 active:scale-[0.98]"
+          >
+            Try again
+          </button>
         </div>
       )}
 
@@ -468,6 +476,19 @@ export function RunView(props: {
                   : `Undo ${reversibleCount === state.changes.length ? "all " : ""}${reversibleCount} change${reversibleCount === 1 ? "" : "s"}`}
               </button>
             ))}
+        </motion.div>
+      )}
+
+      {/* read-only task: confirm explicitly that nothing was modified (the trust promise is only
+          visibly kept when SOMETHING changed; silence on a read-only task reads as uncertainty). */}
+      {done && state.changes.length === 0 && state.turns.some((t) => t.reply) && (
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mt-6 flex items-center gap-2.5 rounded-2xl border border-stone-200/80 bg-white px-5 py-4"
+        >
+          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-forest-600" />
+          <p className="text-sm text-stone-600">I didn't change any files — only read them.</p>
         </motion.div>
       )}
 

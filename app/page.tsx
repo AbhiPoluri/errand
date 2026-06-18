@@ -66,6 +66,7 @@ export default function Page() {
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
+  const [recentQuery, setRecentQuery] = useState("");
   const [, setClock] = useState(0); // ticks while idle so relative timestamps stay fresh
 
   const idle = run.state.phase === "idle";
@@ -233,6 +234,7 @@ export default function Page() {
         onFollowUp={run.followUp}
         onUndo={run.undo}
         onReset={run.reset}
+        onRetryStart={run.retryStart}
       />
     );
   }
@@ -598,8 +600,21 @@ export default function Page() {
                 </button>
               )}
             </div>
-            <ul className="mt-1.5">
-              {recent.map((r) => {
+            {recent.length > 5 && (
+              <input
+                value={recentQuery}
+                onChange={(e) => setRecentQuery(e.target.value)}
+                aria-label="Search past errands"
+                placeholder="Search past errands…"
+                className="mt-2 w-full rounded-lg border border-stone-200/80 bg-white/70 px-3 py-1.5 text-[13px] text-stone-700 outline-none transition focus:border-accent-600/40 placeholder:text-stone-400"
+              />
+            )}
+            {(() => {
+              const shown = recent.filter((r) => r.title.toLowerCase().includes(recentQuery.trim().toLowerCase()));
+              if (shown.length === 0) return <p className="mt-3 text-[13px] text-stone-400">No matching errands.</p>;
+              return (
+                <ul className="mt-1.5">
+                  {shown.map((r) => {
                 const isSel = selected.has(r.runId);
                 return (
                   <li key={r.runId}>
@@ -638,6 +653,11 @@ export default function Page() {
                       <span className="min-w-0 flex-1 truncate text-sm text-stone-700 transition group-hover:text-stone-900">
                         {r.title}
                       </span>
+                      {r.changeCount > 0 && (
+                        <span className="shrink-0 text-[11px] text-stone-400">
+                          {r.changeCount} change{r.changeCount === 1 ? "" : "s"}
+                        </span>
+                      )}
                       <span className="shrink-0 font-mono text-[11px] uppercase tracking-wide text-stone-400">
                         {relativeTime(r.createdAt)}
                       </span>
@@ -659,7 +679,9 @@ export default function Page() {
                   </li>
                 );
               })}
-            </ul>
+                </ul>
+              );
+            })()}
           </motion.div>
         )}
       </motion.div>
