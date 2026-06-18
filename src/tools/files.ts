@@ -17,12 +17,6 @@ import {
   statSync,
 } from "node:fs";
 import { join, dirname } from "node:path";
-
-// Human phrasing for a move/copy: "into <folder>" when relocating, "to <name>" when renaming.
-function relocationPhrase(verb: string, from: string, to: string): string {
-  const sameDir = dirname(from) === dirname(to);
-  return sameDir ? `${verb} ${name(from)} to ${name(to)}` : `${verb} ${name(from)} into ${name(dirname(to))}`;
-}
 import { z } from "zod";
 import type { Tool, ToolResult } from "./index.ts";
 import {
@@ -36,6 +30,12 @@ import {
   PathError,
 } from "./fileutil.ts";
 import { docKindFor, extractDocument, isImageFile, ocrImage } from "./extract.ts";
+
+// Human phrasing for a move/copy: "into <folder>" when relocating, "to <name>" when renaming.
+function relocationPhrase(verb: string, from: string, to: string): string {
+  const sameDir = dirname(from) === dirname(to);
+  return sameDir ? `${verb} ${name(from)} to ${name(to)}` : `${verb} ${name(from)} into ${name(dirname(to))}`;
+}
 
 // Reached only for non-image binaries (images route to OCR first) — keep it generic.
 function binaryRefusal(): string {
