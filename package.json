@@ -26,6 +26,7 @@
     "ocr:test": "tsx src/ocrTest.ts",
     "cap:test": "tsx src/capTest.ts",
     "endpoint:test": "tsx src/endpointTest.ts",
+    "zip:test": "tsx src/zipTest.ts",
     "cli": "tsx src/cli.ts",
     "web": "next dev -p 3200",
     "dev": "next dev -p 3200"

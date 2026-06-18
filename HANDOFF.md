@@ -4,16 +4,26 @@
 > `NIGHT-LOG.md` are the per-item log of the session summarized here. This block is the short
 > "where we are + what's next."
 
-## Where we are: merged to `main` + the Ollama-LAN feature on top
+## Where we are: merged to `main`, plus three follow-ups on top
 **The overnight branch is MERGED into `main` (merge commit `9d23a24`); work continues on `main`
-directly.** The latest addition (commit `401f3b6`, on `main`) is a **configurable Ollama endpoint** —
-Errand can now run on Ollama on another machine on your network (e.g. a Mac Studio at
-`http://192.168.86.237:11434/v1`), not just localhost: persisted base URL used for chat + model
-detection, a pre-flight reachability probe (unreachable host fails in ~2.5s, not a ~120s hang),
-forgiving/path-preserving URL parsing, and a **dropdown of detected models** in Settings with live
-"Connected — N models found" feedback + reset-to-localhost. 8 adversarial-review findings fixed; new
-`endpoint:test` (21 assertions). See PLAN §11 (top entry). ⚠️ `errand.db` is currently set to
-**Ollama / qwen3.5:35b-a3b @ the Mac Studio** — switch back to OpenRouter in Settings for cloud use.
+directly.** Three things landed since, newest first (see PLAN §11 for detail):
+- **`create_zip`** — Errand can now PACKAGE files into a `.zip` (not just unpack). This is the first
+  of the two deferred from-scratch binary writers, built the safe way: a `buildZip`/`crc32` writer
+  beside the existing reader, verified three ways (round-trips through our own reader, passes the
+  **system `unzip -t`**, and a sandboxed tool test) + a live agent run on the Mac Studio. 3-lens
+  adversarial review → 4 findings, 3 fixed (HIGH: FIFO/device source hang/OOM; MED: symlink-output
+  escape; LOW: dup-path "(2)"); 1 LOW left (empty-dir residue on undo, matches the write-family). New
+  `npm run zip:test`. `save_as_document` (OOXML writer) is STILL deferred — higher risk, lower value.
+- **Settings icon** was a sun; now a gear (`app/page.tsx`).
+- **Configurable Ollama endpoint** (commit `401f3b6`) — Errand can run on Ollama on another machine on
+  your network (e.g. a Mac Studio at `http://192.168.86.237:11434/v1`), not just localhost: persisted
+  base URL for chat + model detection, a pre-flight reachability probe (unreachable host fails in
+  ~2.5s, not a ~120s hang), forgiving/path-preserving URL parsing, and a **dropdown of detected
+  models** in Settings with live "Connected — N models found" feedback + reset-to-localhost. 8
+  adversarial-review findings fixed; new `endpoint:test` (21 assertions).
+
+⚠️ `errand.db` is currently set to **Ollama / qwen3.5:35b-a3b @ the Mac Studio** — switch back to
+OpenRouter in Settings → Model for cloud use.
 
 **What the merged overnight branch brought — 53 improvements across 4 autonomous discovery rounds, each adversarially reviewed
 (4 review passes, ~22 findings fixed incl. 2 high-sev I'd introduced), plus morning follow-ups:**
@@ -40,20 +50,21 @@ websink/ext/bash/clickrisk/restart/cap); UI screenshot-verified (desktop + 375px
 reviews with all confirmed findings fixed or consciously left (the few "left" ones are noted in
 MORNING-REPORT.md and are low/self-healing).
 
-**Deferred for HUMAN review — do NOT ship unsupervised:** `create_zip` + `save_as_document` —
-from-scratch ZIP/OOXML *writers*. Reading is shipped + safe; each has a round-trip-through-the-reader
-test plan ready to make it safe when reviewed.
+**Deferred for HUMAN review — do NOT ship unsupervised:** `save_as_document` — a from-scratch OOXML
+(.docx/.xlsx) *writer*. (`create_zip`, the other deferred writer, has since been built + reviewed +
+shipped — see the top of this doc.) Reading is shipped + safe; the round-trip-through-the-reader test
+plan is ready to make the document writer safe when reviewed.
 
-**Suggested next (your call):** v8 Gmail (first OAuth pack — needs your Google Cloud project +
-consent) / v9 Calendar; hosting-grade durability (resume mid-flight, multi-worker — a core-run-state
-refactor, too big to land unreviewed); or the two deferred ZIP/OOXML writers (review before shipping).
-(Branch merge ✅ and wiring the detected-Ollama list into Settings ✅ are both done.)
+**Suggested next (your call):** hosting-grade durability (resume mid-flight, multi-worker — a
+core-run-state refactor, too big to land unreviewed); or `save_as_document`, the remaining deferred
+OOXML writer (review before shipping — riskier than the zip writer was). (Gmail is OFF the table per
+the user. Branch merge ✅, Ollama-LAN ✅, and create_zip ✅ are done.)
 
 ## Resume / verify quickly
 - `npm run web` → http://localhost:3200. Extension must be loaded for browser tasks (green dot on Home).
 - Offline tests (all green): `npm run loop:test`, `web:test`, `fileops:test`, `journal:test`,
   `embed:test`, `store:test`, `websink:test`, `ext:test`, `bash:test`, `clickrisk:test`,
-  `restart:test`, `cap:test`, `endpoint:test`. (`mem:test` needs the OpenRouter key; `doc:test`/`ocr:test` are slower.)
+  `restart:test`, `cap:test`, `endpoint:test`, `zip:test`. (`mem:test` needs the OpenRouter key; `doc:test`/`ocr:test` are slower.)
 - ⚠️ Model/endpoint is switchable from the **header pill** AND Settings → Model (OpenRouter ↔ Ollama;
   Ollama can point at localhost OR another machine on the LAN via the "Ollama server" URL field, with
   detected models in a dropdown). It's currently on Ollama @ the Mac Studio — confirm the model/endpoint

@@ -9,7 +9,7 @@
 //             emit garbage on real Word-exported PDFs, so we use unpdf (bundled pdfjs). If a
 //             PDF yields no text (it's scanned images), we say so honestly rather than guess.
 // (.csv needs nothing here — it's already text, so read_file reads it on the plain-text path.)
-import { inflateRawSync } from "node:zlib";
+import { inflateRawSync, deflateRawSync } from "node:zlib";
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
 
@@ -425,4 +425,102 @@ function tidy(s: string): string {
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+// ---- ZIP writer (the mirror of the reader above) ----
+// Own every byte: a self-contained CRC-32 (IEEE polynomial, reflected) + a minimal ZIP builder.
+// The output is read back by listZipEntries/inflateZipEntry above — round-trip verified in zip:test
+// and cross-checked against the system `unzip`.
+
+let CRC_TABLE: Uint32Array | null = null;
+export function crc32(buf: Buffer): number {
+  if (!CRC_TABLE) {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      t[n] = c >>> 0;
+    }
+    CRC_TABLE = t;
+  }
+  let crc = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) crc = (CRC_TABLE[(crc ^ buf[i]) & 0xff] ^ (crc >>> 8)) >>> 0;
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+export interface ZipInput {
+  name: string; // entry path inside the archive (forward slashes); caller sanitizes
+  data: Buffer;
+}
+
+// DOS modification time/date fields. We stamp a fixed valid minimum (1980-01-01 00:00) rather than
+// the real clock so the output is deterministic (and `new Date()` stays out of the format layer).
+const DOS_DATE = 0x0021; // 1980-01-01 — the minimum valid DOS date (day/month 0 is illegal)
+const DOS_TIME = 0x0000; // 00:00:00
+
+// Build a valid ZIP archive from in-memory files. Each entry is DEFLATEd when that actually shrinks
+// it (never inflates already-compressed bytes), else STOREd. UTF-8 filenames (general-purpose bit
+// 11). Layout = [local record]* [central record]* [EOCD], matching the reader's offsets exactly.
+export function buildZip(entries: ZipInput[]): Buffer {
+  const locals: Buffer[] = [];
+  const centrals: Buffer[] = [];
+  let offset = 0; // running byte offset of each local header from the start of the archive
+  for (const entry of entries) {
+    const nameBuf = Buffer.from(entry.name, "utf8");
+    const uncompSize = entry.data.length;
+    const crc = crc32(entry.data);
+    const deflated = deflateRawSync(entry.data);
+    const useDeflate = deflated.length < uncompSize; // only when it helps
+    const method = useDeflate ? 8 : 0;
+    const body = useDeflate ? deflated : entry.data;
+    const compSize = body.length;
+
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0); // local file header signature
+    local.writeUInt16LE(20, 4); // version needed (2.0)
+    local.writeUInt16LE(0x0800, 6); // general-purpose flag: UTF-8 name
+    local.writeUInt16LE(method, 8);
+    local.writeUInt16LE(DOS_TIME, 10);
+    local.writeUInt16LE(DOS_DATE, 12);
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(compSize, 18);
+    local.writeUInt32LE(uncompSize, 22);
+    local.writeUInt16LE(nameBuf.length, 26);
+    local.writeUInt16LE(0, 28); // extra field length
+    locals.push(local, nameBuf, body);
+
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0); // central directory header signature
+    central.writeUInt16LE(20, 4); // version made by
+    central.writeUInt16LE(20, 6); // version needed
+    central.writeUInt16LE(0x0800, 8); // UTF-8 name
+    central.writeUInt16LE(method, 10);
+    central.writeUInt16LE(DOS_TIME, 12);
+    central.writeUInt16LE(DOS_DATE, 14);
+    central.writeUInt32LE(crc, 16);
+    central.writeUInt32LE(compSize, 20);
+    central.writeUInt32LE(uncompSize, 24);
+    central.writeUInt16LE(nameBuf.length, 28);
+    central.writeUInt16LE(0, 30); // extra
+    central.writeUInt16LE(0, 32); // comment
+    central.writeUInt16LE(0, 34); // disk number start
+    central.writeUInt16LE(0, 36); // internal attrs
+    central.writeUInt32LE(0, 38); // external attrs
+    central.writeUInt32LE(offset, 42); // offset of this entry's local header
+    centrals.push(central, nameBuf);
+
+    offset += local.length + nameBuf.length + body.length;
+  }
+  const localDir = Buffer.concat(locals);
+  const centralDir = Buffer.concat(centrals);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0); // EOCD signature
+  eocd.writeUInt16LE(0, 4); // this disk number
+  eocd.writeUInt16LE(0, 6); // disk with central dir start
+  eocd.writeUInt16LE(entries.length, 8); // CD records on this disk
+  eocd.writeUInt16LE(entries.length, 10); // total CD records
+  eocd.writeUInt32LE(centralDir.length, 12); // size of central directory
+  eocd.writeUInt32LE(localDir.length, 16); // offset of central directory (= bytes before it)
+  eocd.writeUInt16LE(0, 20); // comment length
+  return Buffer.concat([localDir, centralDir, eocd]);
 }
