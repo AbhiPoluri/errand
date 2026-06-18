@@ -3,6 +3,7 @@
 // parked loop. Stored on globalThis so Next.js dev HMR doesn't drop live runs.
 import { config } from "../config.ts";
 import { Session } from "../session.ts";
+import { Journal } from "../journal.ts";
 import { Logger } from "../log.ts";
 import { Registry } from "../tools/index.ts";
 import { buildRegistryFor, DEFAULT_PACKS } from "../capabilities/index.ts";
@@ -138,6 +139,12 @@ function attachPersistence(entry: RunEntry): void {
     // explicitly so a write failure can never interrupt the live stream or mark a run wrong.
     try {
       if (e.type !== "message.delta") store.appendEvent(entry.runId, e);
+      // Persist the journal manifest the moment a mutating op completes, NOT only at turn-settle.
+      // The destructive change + its snapshot already hit disk during tool.run; if the worker is
+      // killed mid-turn, the end-of-turn persistJournal never runs and Undo-after-restart would
+      // find no manifest. Persisting on each tool.result closes that crash window (idempotent via
+      // INSERT OR IGNORE). The runTurn.finally call stays as a harmless backstop.
+      if (e.type === "tool.result") persistJournal(entry);
       if (e.type === "run.finished") {
         store.setStatus(entry.runId, "done");
         store.setChangeCount(entry.runId, e.changes.length);
@@ -341,12 +348,17 @@ export async function sendMessage(runId: string, message: string): Promise<"ok" 
 }
 
 // Undo every reversible op this run journaled (delete→restore, write→prior bytes, …).
-// getRun (not runs.get) so a completed run that's no longer in memory — or any run after a
-// server restart — rehydrates and rebuilds its journal from the manifest, instead of 404ing.
+// If the run is live, use its in-memory journal. Otherwise rebuild a THROWAWAY journal from the
+// persisted manifest and undo from that — never go through getRun/rehydrate, which would
+// construct a full AgentRunner + a permanent sink subscription and leave the evicted run resident
+// in the registry for the rest of the process (resource growth on every undo of an old run).
 export async function undoRun(
   runId: string,
 ): Promise<{ undone: number; failed: number; skipped: number } | null> {
-  const entry = getRun(runId);
-  if (!entry) return null;
-  return entry.session.journal.undoAll();
+  const live = runs.get(runId);
+  if (live) return live.session.journal.undoAll();
+  if (!store.getStoredRun(runId)) return null;
+  const journal = new Journal();
+  rebuildJournalFromStore(runId, journal);
+  return journal.undoAll();
 }

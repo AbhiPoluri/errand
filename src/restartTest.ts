@@ -126,6 +126,16 @@ async function main(): Promise<void> {
   check("delete undone (trash.txt restored)", existsSync(delTarget) && readFileSync(delTarget, "utf8") === "DELETE ME");
   check("rename undone (old-name.txt restored)", existsSync(renSrc) && !existsSync(join(ws, "new-name.txt")));
 
+  // Double-undo idempotency: recreate an unrelated file at the move's old destination, undo
+  // AGAIN, and confirm the reconstructed inverse does NOT clobber the already-restored file.
+  writeFileSync(join(ws, "moved.txt"), "UNRELATED");
+  await restored.undoAll();
+  check("double-undo did not clobber the restored file", readFileSync(moveSrc, "utf8") === "MOVE ME");
+  check(
+    "double-undo left the unrelated file intact",
+    existsSync(join(ws, "moved.txt")) && readFileSync(join(ws, "moved.txt"), "utf8") === "UNRELATED",
+  );
+
   // ---- undoRun() on a run NOT in memory rehydrates + rebuilds instead of 404ing ----
   console.log("\n-- undoRun on an out-of-memory run --");
   const ws2 = mkdtempSync(join(tmpdir(), "errand-undorun-"));

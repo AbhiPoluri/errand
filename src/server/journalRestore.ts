@@ -19,15 +19,18 @@ export function reconstructInverse(op: { manifest: unknown }): (() => Promise<vo
   switch (m.kind) {
     case "move": // move_file and rename_file both record this
       if (typeof m.from === "string" && typeof m.to === "string") {
+        // Guard BOTH ends: only move back if the moved file is still at `to` AND nothing new has
+        // been created at the original `from`. Without the `!existsSync(from)` check, undoing
+        // twice (or after an unrelated file was recreated at `from`) would clobber it.
         return async () => {
-          if (existsSync(m.to)) renameSync(m.to, m.from);
+          if (existsSync(m.to) && !existsSync(m.from)) renameSync(m.to, m.from);
         };
       }
       return undefined;
     case "delete": // file was parked in the Review folder; move it back
       if (typeof m.from === "string" && typeof m.dest === "string") {
         return async () => {
-          if (existsSync(m.dest)) renameSync(m.dest, m.from);
+          if (existsSync(m.dest) && !existsSync(m.from)) renameSync(m.dest, m.from);
         };
       }
       return undefined;
