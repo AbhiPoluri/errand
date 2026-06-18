@@ -9,12 +9,21 @@ import { client as defaultClient } from "../client.ts";
 const EMBED_MODEL = "openai/text-embedding-3-small";
 export const EMBED_DIM = 1536;
 
+// Minimal structural shape of the embeddings client. The real OpenAI client is assignable to it,
+// and a test stub typed against it can't return a wrong-shaped response and still compile (which
+// would defeat the offline embed:test).
+export interface EmbedClient {
+  embeddings: {
+    create(args: { model: string; input: string | string[] }): Promise<{ data: { embedding: number[]; index?: number }[] }>;
+  };
+}
+
 // The active embeddings client. Defaults to the OpenRouter singleton; tests swap in a stub via
 // _setEmbedClient so embed()/embedMany() can be exercised fully offline (the fail-soft contract
 // and the index-remap aren't otherwise verifiable without network).
-let activeClient: { embeddings: { create: (args: any) => Promise<any> } } = defaultClient as any;
-export function _setEmbedClient(c: { embeddings: { create: (args: any) => Promise<any> } } | null): void {
-  activeClient = (c as any) ?? (defaultClient as any);
+let activeClient: EmbedClient = defaultClient;
+export function _setEmbedClient(c: EmbedClient | null): void {
+  activeClient = c ?? defaultClient;
 }
 
 // Embed one string. Returns the vector, or null on any failure (blank input, network error,
@@ -46,7 +55,7 @@ export async function embedMany(texts: string[]): Promise<(number[] | null)[]> {
   if (!live.length) return out;
   try {
     const res = await activeClient.embeddings.create({ model: EMBED_MODEL, input: live.map((l) => l.text) });
-    res.data.forEach((d: any, i: number) => {
+    res.data.forEach((d, i) => {
       const slot = live[d.index ?? i]; // map the API row back to its original position
       if (slot && Array.isArray(d.embedding) && d.embedding.length) {
         out[slot.pos] = d.embedding as number[];
