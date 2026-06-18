@@ -1,0 +1,46 @@
+{
+  "name": "agent-harness",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A from-scratch AI agent harness over OpenRouter. Own every line.",
+  "scripts": {
+    "v0": "tsx src/v0.ts",
+    "models": "tsx src/checkModel.ts",
+    "v1:test": "tsx src/v1test.ts",
+    "v2:test": "tsx src/v2test.ts",
+    "v3:test": "tsx src/v3test.ts",
+    "mem:test": "tsx src/memtest.ts",
+    "restart:test": "tsx src/restartTest.ts",
+    "doc:test": "tsx src/docTest.ts",
+    "ocr:test": "tsx src/ocrTest.ts",
+    "cap:test": "tsx src/capTest.ts",
+    "cli": "tsx src/cli.ts",
+    "web": "next dev -p 3200",
+    "dev": "next dev -p 3200"
+  },
+  "dependencies": {
+    "framer-motion": "^12.40.0",
+    "geist": "^1.7.2",
+    "next": "^14.2.35",
+    "openai": "^4.77.0",
+    "playwright-core": "^1.61.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "tesseract.js": "^7.0.0",
+    "unpdf": "^1.6.2",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "autoprefixer": "^10.5.0",
+    "postcss": "^8.5.15",
+    "tailwindcss": "^3.4.19",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

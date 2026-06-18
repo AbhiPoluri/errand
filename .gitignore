@@ -1,0 +1,29 @@
+# dependencies + build
+node_modules/
+.next/
+*.tsbuildinfo
+next-env.d.ts
+
+# secrets + local data — NEVER commit
+.env
+.env.local
+*.log
+logs/
+errand.db
+errand.db-*
+*.db
+
+# Errand's scratch sandbox + uploads
+workspace/
+
+# OCR language model (downloaded at runtime)
+.tesseract-cache/
+eng.traineddata
+
+# test fixtures: keep the two source files, ignore the test-generated ones
+test-fixtures/*
+!test-fixtures/sample.pdf
+!test-fixtures/scan.png
+
+# OS
+.DS_Store

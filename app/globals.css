@@ -1,0 +1,99 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+/* Warm paper base with a faint clay wash at the top — editorial depth, not decoration. */
+body {
+  @apply text-stone-900 antialiased;
+  background-color: #f4efe6;
+  background-image:
+    radial-gradient(120% 80% at 50% -20%, rgba(194, 85, 46, 0.07), transparent 60%),
+    radial-gradient(100% 60% at 100% 0%, rgba(194, 85, 46, 0.04), transparent 50%);
+  background-attachment: fixed;
+}
+
+/* Fine film grain (fixed, pointer-events-none) — paper texture, no scroll repaint cost. */
+.grain {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+  opacity: 0.55;
+  mix-blend-mode: multiply;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.35'/%3E%3C/svg%3E");
+}
+
+/* Diffusion shadow — soft, wide, tinted warm (toward ink) for premium elevation. */
+.lift {
+  box-shadow:
+    0 1px 2px rgba(41, 30, 22, 0.05),
+    0 14px 34px -14px rgba(41, 30, 22, 0.14);
+}
+.lift-lg {
+  box-shadow:
+    0 1px 3px rgba(41, 30, 22, 0.06),
+    0 28px 60px -22px rgba(41, 30, 22, 0.2);
+}
+
+/* One slow breathing presence ring on the working orb; pauses when waiting. */
+@keyframes breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.45;
+  }
+  50% {
+    transform: scale(1.5);
+    opacity: 0;
+  }
+}
+.breathe {
+  animation: breathe 2.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* Indeterminate clay shimmer replaces every spinner. */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+.shimmer {
+  background: linear-gradient(90deg, rgba(194, 85, 46, 0.18) 25%, rgba(194, 85, 46, 0.5) 37%, rgba(194, 85, 46, 0.18) 63%);
+  background-size: 200% 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+}
+
+/* Subtle, refined warm scrollbar. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(41, 30, 22, 0.16);
+  border-radius: 9999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(41, 30, 22, 0.28);
+  background-clip: content-box;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .breathe,
+  .shimmer {
+    animation: none;
+  }
+}
