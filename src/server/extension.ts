@@ -16,7 +16,7 @@ interface Pending {
 type Controller = ReadableStreamDefaultController<Uint8Array>;
 
 const g = globalThis as unknown as {
-  __extStream?: { controller?: Controller; id?: string };
+  __extStream?: { controller?: Controller; id?: string; onClose?: () => void };
   __extPending?: Map<string, Pending>;
 };
 const stream = (g.__extStream ??= {});
@@ -27,15 +27,46 @@ export function isExtConnected(): boolean {
   return !!stream.controller;
 }
 
-// Called by the SSE route when the extension connects / disconnects.
-export function registerStream(controller: Controller, id: string): void {
+// Fail every in-flight command now (clearing its timer) with an honest reason, instead of letting
+// each wait out its 30s "took too long" timer when the real cause is a disconnect/reconnect.
+function failAllPending(error: string): void {
+  for (const p of pending.values()) {
+    clearTimeout(p.timer);
+    p.resolve({ ok: false, error });
+  }
+  pending.clear();
+}
+
+// Called by the SSE route when the extension connects / disconnects. `onClose` lets the route
+// tear down its own resources (the heartbeat interval) the instant it's superseded.
+export function registerStream(controller: Controller, id: string, onClose?: () => void): void {
+  // A fresh connection supersedes any prior one: fail its in-flight commands, run the OLD route's
+  // cleanup (so its heartbeat stops NOW, not on its next ~10s tick), and close the old controller.
+  if (stream.controller && stream.id !== id) {
+    failAllPending("the browser reconnected");
+    try {
+      stream.onClose?.();
+    } catch {
+      /* best effort */
+    }
+    try {
+      stream.controller.close();
+    } catch {
+      /* already closed */
+    }
+  }
   stream.controller = controller;
   stream.id = id;
+  stream.onClose = onClose;
 }
 export function unregisterStream(id: string): void {
   if (stream.id === id) {
     stream.controller = undefined;
     stream.id = undefined;
+    stream.onClose = undefined;
+    // Resolve parked commands immediately with the true reason rather than the misleading
+    // "took too long" 30s later (tab close, Chrome suspend, laptop sleep are routine).
+    failAllPending("the browser disconnected");
   }
 }
 
@@ -64,6 +95,8 @@ export function resolveResult(id: string, result: any): boolean {
   if (!p) return false;
   clearTimeout(p.timer);
   pending.delete(id);
-  p.resolve(result);
+  // Normalize to the {ok, ...} envelope the loop expects: a malformed extension reply (a bare
+  // string/number/null) must not smuggle an arbitrary shape into the tool result the model sees.
+  p.resolve(result && typeof result === "object" ? result : { ok: false, error: "bad result" });
   return true;
 }

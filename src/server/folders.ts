@@ -2,8 +2,8 @@
 // list of folders that actually exist — never types a path. The default is the safe
 // in-app sandbox. resolveWithin() still confines every op to the chosen root.
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { statSync, accessSync, constants } from "node:fs";
+import { join, resolve } from "node:path";
+import { statSync, accessSync, realpathSync, constants } from "node:fs";
 import { config } from "../config.ts";
 
 export interface FolderOption {
@@ -35,10 +35,28 @@ export function availableFolders(): FolderOption[] {
   return candidates.filter((c) => c.safe || dirUsable(c.path));
 }
 
-// Validate roots requested by the client (pre-flight). Returns a plain problem if any
-// folder is missing/unwritable, so the failure is calm and pre-commitment.
+// Canonical real path for allow-list comparison; falls back to a plain resolve if the path can't
+// be resolved yet (the workspace sandbox may not exist on disk until the first write).
+function realOrSelf(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolve(p);
+  }
+}
+
+// Validate roots requested by the client (pre-flight). A requested root MUST be one of the folders
+// Errand actually offers — the picker is an allow-list, and the server must enforce it, not trust
+// whatever path the request carries (otherwise a crafted POST could point the agent — and all the
+// resolveWithin confinement — at ~/.ssh, a git repo, anywhere writable). Compared by resolved real
+// path so a symlink can't masquerade as an allowed folder. Then the usual usable-dir check for a
+// calm "couldn't open / no permission" message.
 export function checkRoots(paths: string[]): { ok: true } | { ok: false; problem: string } {
+  const allowed = new Set(availableFolders().map((f) => realOrSelf(f.path)));
   for (const p of paths) {
+    if (!allowed.has(realOrSelf(p))) {
+      return { ok: false, problem: "That isn't one of the folders I can work in." };
+    }
     if (!dirUsable(p)) {
       return { ok: false, problem: "I couldn't open that folder, or I don't have permission to change things in it." };
     }

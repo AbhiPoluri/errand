@@ -16,26 +16,12 @@ import { bash } from "./tools/bash.ts";
 import { AgentRunner } from "./loop.ts";
 import { ScriptedApprovalGate } from "./approvals.ts";
 import type { AgentEvent, EventSink } from "./events.ts";
+import { wellFormed } from "./testutil.ts";
 
 const SYSTEM =
   "You are Errand, a calm helper. Keep replies short and plain. Never use emojis. Use tools when asked.";
 
 type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
-
-// Every assistant tool_call id must have a matching tool result somewhere after it.
-function wellFormed(messages: Msg[]): { ok: boolean; detail: string } {
-  const resultIds = new Set(
-    messages.filter((m) => m.role === "tool").map((m: any) => m.tool_call_id),
-  );
-  for (const m of messages) {
-    if (m.role === "assistant" && Array.isArray((m as any).tool_calls)) {
-      for (const c of (m as any).tool_calls) {
-        if (!resultIds.has(c.id)) return { ok: false, detail: `no result for tool_call ${c.id}` };
-      }
-    }
-  }
-  return { ok: true, detail: "every tool_call has a result" };
-}
 
 class Tap implements EventSink {
   events: AgentEvent[] = [];

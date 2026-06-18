@@ -14,7 +14,9 @@ export async function GET(req: NextRequest) {
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
-      registerStream(controller, id);
+      // Pass cleanup as the supersede callback so a reconnect stops THIS heartbeat immediately
+      // instead of leaving it to fire once more (~10s) and clean up on the resulting enqueue throw.
+      registerStream(controller, id, cleanup);
       controller.enqueue(enc.encode(": connected\n\n"));
       heartbeat = setInterval(() => {
         try {

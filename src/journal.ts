@@ -8,6 +8,18 @@
 
 import type { Reversibility } from "./tools/index.ts";
 
+// Serializable description of a reversible op — the source of truth for reconstructing its inverse
+// after a restart (when the live closure is gone). Discriminated on `kind` so the producers (the
+// file tools) and the consumer (reconstructInverse) agree at compile time and the switch is
+// exhaustive: a typo like `to` instead of `dest` for a delete becomes a tsc error, not a silently
+// non-undoable op.
+export type OpManifest =
+  | { kind: "move"; from: string; to: string } // move_file + rename_file
+  | { kind: "delete"; from: string; dest: string }
+  | { kind: "copy"; to: string }
+  | { kind: "make_folder"; path: string }
+  | { kind: "write"; path: string; wasNew: boolean; snapshot?: string | null };
+
 export interface JournalEntry {
   id: string;
   op: string; // "move" | "delete" | "write" | "bash" ...
@@ -17,13 +29,18 @@ export interface JournalEntry {
   // Present ONLY when truly undoable. Restores the prior state; must be idempotent-safe.
   // Undo eligibility is THIS, not the label — a 'reversible' label with no inverse is a lie.
   inverse?: () => Promise<void>;
+  // Serializable description of the op — persisted so the inverse can be RECONSTRUCTED after a
+  // restart, when the live `inverse` closure is gone.
+  manifest?: OpManifest;
 }
 
 export class Journal {
   private entries: JournalEntry[] = [];
 
-  record(entry: Omit<JournalEntry, "id" | "ts">): string {
-    const id = crypto.randomUUID();
+  // `id` is normally generated; rebuildJournalFromStore passes the persisted opId so the same
+  // entry re-persists idempotently (INSERT OR IGNORE) instead of duplicating on the next turn.
+  record(entry: Omit<JournalEntry, "id" | "ts"> & { id?: string }): string {
+    const id = entry.id ?? crypto.randomUUID();
     // If something claims 'reversible' but recorded no inverse, demote it — never lie.
     const reversibility: Reversibility =
       entry.reversibility === "reversible" && typeof entry.inverse !== "function" ? "unknown" : entry.reversibility;

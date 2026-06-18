@@ -19,11 +19,9 @@ export type AgentEventBody =
     | { type: "run.started"; title: string }
     | { type: "user.message"; text: string } // the user's message for this turn (drives the transcript)
     | { type: "turn.started"; index: number; maxIterations: number }
-    // --- streaming deltas: emitted from v4 (non-streaming v1 uses thinking.summary/message.completed) ---
-    | { type: "thinking.delta"; text: string }
+    // --- streaming: message.delta is emitted from v4 (non-streaming uses message.completed) ---
     | { type: "thinking.summary"; summary: string }
     | { type: "message.delta"; text: string }
-    | { type: "message.refusal"; text: string }
     // --- v1 ---
     | { type: "message.completed"; text: string }
     | {
@@ -72,7 +70,7 @@ export type AgentEventBody =
       }
     | {
         type: "run.finished";
-        status: "completed" | "cancelled";
+        status: "completed"; // cancellation flows through run.error (kind:"cancelled"), never here
         finalMessage: string;
         changes: { summary: string; reversibility: Reversibility; undoable: boolean; journaledOpId?: string }[];
       }

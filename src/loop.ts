@@ -77,7 +77,11 @@ export class AgentRunner {
       seq: this.seq++,
       ts: Date.now(),
     };
-    this.o.logger.log("event", event);
+    // Skip the per-token deltas: Logger.log is a synchronous appendFileSync, so logging every
+    // streamed token serializes the stream behind disk latency. The final text is reconstructed
+    // from message.completed, so per-delta logs carry no diagnostic value. Structural events
+    // (tool calls, approvals, errors, usage) are still logged.
+    if (event.type !== "message.delta") this.o.logger.log("event", event);
     await this.o.sink.emit(event);
   }
 
@@ -112,13 +116,50 @@ export class AgentRunner {
         tool_choice: "auto" as const,
         parallel_tool_calls: false, // INVARIANT
       };
+      // Bounded retry for a TRANSIENT transport failure that struck before any output this turn.
+      let attempt = 0;
+      const maxRetries = Number(process.env.MAX_TRANSPORT_RETRIES ?? "2");
+      const backoffMs = Number(process.env.RETRY_BACKOFF_MS ?? "500");
+      for (;;) {
       try {
         if (this.stream) {
           const stream = await this.client.chat.completions.create(
             { ...baseArgs, stream: true, stream_options: { include_usage: true } },
             { signal },
           );
-          for await (const chunk of stream) {
+          // Consume with an idle watchdog: the SDK timeout only covers up to the FIRST byte, so a
+          // stream that connects then goes silent mid-token would otherwise block forever and leave
+          // the run stuck "working". Race each chunk against STREAM_IDLE_MS; on idle, tear down the
+          // request and throw into the catch below → a recoverable transport error, not a hang.
+          const idleMs = Number(process.env.STREAM_IDLE_MS) || 60_000;
+          const iter = (stream as any)[Symbol.asyncIterator]();
+          for (;;) {
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            let step: IteratorResult<any>;
+            try {
+              step = await Promise.race([
+                iter.next(),
+                new Promise<never>((_, rej) => {
+                  timer = setTimeout(() => rej(new Error("stream_idle")), idleMs);
+                }),
+              ]);
+            } catch (e) {
+              try {
+                (stream as any).controller?.abort?.();
+              } catch {
+                /* best effort */
+              }
+              try {
+                await iter.return?.();
+              } catch {
+                /* best effort */
+              }
+              throw e;
+            } finally {
+              clearTimeout(timer);
+            }
+            if (step.done) break;
+            const chunk = step.value;
             if (chunk.usage) usage = chunk.usage;
             const ch = chunk.choices?.[0];
             if (!ch) continue;
@@ -156,12 +197,44 @@ export class AgentRunner {
           }
           // No deltas were streamed; the reply (if no tools) is emitted via message.completed below.
         }
+        break; // create + consume succeeded — leave the retry loop
       } catch (err: any) {
         if (signal.aborted || err?.name === "AbortError") {
           await this.emit({ type: "run.error", kind: "cancelled", userMessage: "Okay, I stopped.", recoverable: true });
           return "";
         }
         this.o.logger.log("transport_error", String(err?.stack ?? err));
+        // Retry ONLY a TRANSIENT failure that struck BEFORE any token/tool was emitted this turn —
+        // retrying after output would duplicate it, and retrying a deterministic 4xx (bad model id,
+        // bad key, malformed request) just wastes round-trips. A connection error / idle-watchdog
+        // throw carries no status (→ retry); a 408/409/429/5xx is retryable; a 4xx is not.
+        const status = (err as any)?.status;
+        const retryable =
+          status === undefined || status === 408 || status === 409 || status === 429 || (typeof status === "number" && status >= 500);
+        if (attempt < maxRetries && retryable && content === "" && toolAcc.length === 0) {
+          attempt++;
+          await this.emit({ type: "thinking.summary", summary: "Reconnecting…" });
+          // Abortable backoff: if the user hits Stop during the wait, react immediately rather than
+          // waiting the timer out and only then noticing on the next create().
+          await new Promise<void>((resolve) => {
+            const done = () => {
+              clearTimeout(t);
+              signal.removeEventListener("abort", done);
+              resolve();
+            };
+            const t = setTimeout(done, backoffMs * attempt + Math.floor(Math.random() * backoffMs));
+            if (signal.aborted) return done();
+            signal.addEventListener("abort", done, { once: true });
+          });
+          if (signal.aborted) {
+            await this.emit({ type: "run.error", kind: "cancelled", userMessage: "Okay, I stopped.", recoverable: true });
+            return "";
+          }
+          reasoning = "";
+          finishReason = null;
+          usage = null;
+          continue; // try the request again
+        }
         await this.emit({
           type: "run.error",
           kind: "transport",
@@ -170,6 +243,7 @@ export class AgentRunner {
         });
         return "";
       }
+      } // end retry loop
 
       const toolCalls = toolAcc.filter(Boolean);
       const msg = {
@@ -252,23 +326,6 @@ export class AgentRunner {
           }
 
           const { tool, args, description } = prep;
-
-          // Stuck-detection: a non-repeatable action (a click/type/file-op) repeated with
-          // the exact same args many times means the model is looping — stop, don't churn.
-          if (!REPEATABLE.has(tool.name)) {
-            const sig = `${tool.name}:${JSON.stringify(args)}`;
-            const n = (callCounts.get(sig) ?? 0) + 1;
-            callCounts.set(sig, n);
-            if (n >= STUCK_THRESHOLD) {
-              await this.emit({
-                type: "run.error",
-                kind: "max_iterations",
-                userMessage: "I kept trying the same step without getting anywhere, so I paused. Want me to try a different way?",
-                recoverable: true,
-              });
-              return "";
-            }
-          }
 
           await this.emit({
             type: "tool.proposed",
@@ -370,6 +427,31 @@ export class AgentRunner {
                 : result,
             ),
           );
+
+          // Stuck-detection (post-run, not at prepare-time). Count EVERY executed call with a
+          // byte-identical (tool, args) signature — success OR failure. The most common real
+          // stuck mode is an action that SUCCEEDS every time but changes nothing (clicking a
+          // no-op/disabled button returns ok with a readable page; re-typing the same text;
+          // re-writing identical content), so resetting on success would let it burn all the way
+          // to MAX_ITERATIONS. Denied/expired/cancelled approvals and preflight failures `continue`
+          // above and never reach here (so the user pushing back can't trip it); uncertain
+          // permanent actions are excluded (we already tell the model not to retry them). Distinct
+          // args — e.g. writing several DIFFERENT files — have distinct signatures and never collide.
+          if (!REPEATABLE.has(tool.name) && !uncertain) {
+            const sig = `${tool.name}:${JSON.stringify(args)}`;
+            const n = (callCounts.get(sig) ?? 0) + 1;
+            callCounts.set(sig, n);
+            if (n >= STUCK_THRESHOLD) {
+              await this.emit({
+                type: "run.error",
+                kind: "max_iterations",
+                userMessage:
+                  "I kept trying the same step without getting anywhere, so I paused. Want me to try a different way?",
+                recoverable: true,
+              });
+              return "";
+            }
+          }
         }
       } finally {
         // INVARIANT: backfill any tool_call left without a result.

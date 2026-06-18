@@ -1,8 +1,56 @@
-# Errand — Session Handoff (2026-06-18)
+# Errand — Session Handoff (updated 2026-06-18, after the overnight + morning session)
 
-> Read this first to resume. The full living spec + changelog is in **`PLAN.md`** (same
-> folder) — this file is the short "where we are + what's next" so you can start fast.
-> **Newest work is in "Latest session" right below.** All on GitHub `AbhiPoluri/errand` (main, ~9 commits).
+> Read this first to resume. `PLAN.md` is the full living spec/changelog; `MORNING-REPORT.md` +
+> `NIGHT-LOG.md` are the per-item log of the session summarized here. This block is the short
+> "where we are + what's next."
+
+## ⚠️ Where we are: a large UNMERGED branch
+**All recent work is on `overnight-2026-06-18` (~57 commits, off `main` @ f21ec17 — NOT merged, NOT
+pushed). `main` is untouched.** Resume with `git checkout overnight-2026-06-18`; review with
+`git diff main..HEAD`. The local dev server on :3200 has been HMR-running this branch.
+
+**What's in it — 53 improvements across 4 autonomous discovery rounds, each adversarially reviewed
+(4 review passes, ~22 findings fixed incl. 2 high-sev I'd introduced), plus morning follow-ups:**
+- **Trust/correctness:** Undo survives restart (persisted journal manifest + new
+  `src/server/journalRestore.ts`); delete same-name collision fix; stuck-detection rewrite (counts
+  only real repetition); corrupt-DB-row guards; web_search snippet alignment; Zod-validated dreaming;
+  truncated-scan honesty in find_duplicates/folder_summary/recent_changes/find_files.
+- **Resilience/safety:** per-request timeouts + streamed bounded body on web tools; loop idle-stream
+  watchdog + bounded retries + 120s client timeout; run_command OOM cap; extension fails parked
+  commands on disconnect; SSE tears down on terminal; **server-side folder allow-list (a real
+  scope-escape fix — `checkRoots`)**; browser click-risk hardening (unlabeled buttons pause).
+- **New tools:** `rename_file`, `folder_summary`, `find_duplicates`, `recent_changes`, `find_files`
+  (name/content search), `extract_zip`; **capability on/off toggles** in Settings.
+- **UX:** first-run welcome card, export transcript, Recently search + change-count badges, Try-again
+  on errors, read-only "nothing changed" confirmation, safe-folder copy; **header model + provider
+  switcher with live Ollama model detection** (`/api/tags`); Settings-modal scroll fix.
+- **Agent guidance (`src/prompt.ts`):** date awareness, cite-the-source / don't-fabricate-on-failure,
+  scope-first on broad requests, prefer-undoable actions, end-of-task recap.
+- **Under the hood:** SQLite WAL + lower(text) dedup indexes; `OpManifest` + `ToolResult<D>` typing;
+  **12 new offline test suites**; tsc clean every commit.
+
+**Verified:** tsc clean per commit; full offline suite green (loop/web/fileops/journal/embed/store/
+websink/ext/bash/clickrisk/restart/cap); UI screenshot-verified (desktop + 375px); 4 adversarial
+reviews with all confirmed findings fixed or consciously left (the few "left" ones are noted in
+MORNING-REPORT.md and are low/self-healing).
+
+**Deferred for HUMAN review — do NOT ship unsupervised:** `create_zip` + `save_as_document` —
+from-scratch ZIP/OOXML *writers*. Reading is shipped + safe; each has a round-trip-through-the-reader
+test plan ready to make it safe when reviewed.
+
+**Suggested next (your call):** merge the branch → then v8 Gmail (first OAuth pack — needs your Google
+Cloud project + consent) / v9 Calendar; hosting-grade durability (resume mid-flight, multi-worker — a
+core-run-state refactor, too big to land unreviewed); the two deferred writers; or wire the detected
+Ollama list into Settings' free-text model field too.
+
+## Resume / verify quickly
+- `npm run web` → http://localhost:3200. Extension must be loaded for browser tasks (green dot on Home).
+- Offline tests (all green): `npm run loop:test`, `web:test`, `fileops:test`, `journal:test`,
+  `embed:test`, `store:test`, `websink:test`, `ext:test`, `bash:test`, `clickrisk:test`,
+  `restart:test`, `cap:test`. (`mem:test` needs the OpenRouter key; `doc:test`/`ocr:test` are slower.)
+- ⚠️ Model/endpoint is now switchable from the **header pill** (OpenRouter ↔ Ollama, with installed
+  local models detected). It was toggled during testing — confirm the pill/Settings shows the model
+  you want before a real run.
 
 ## What Errand is
 A from-scratch TypeScript AI agent harness with a calm consumer UI for **non-technical

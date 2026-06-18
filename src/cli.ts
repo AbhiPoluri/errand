@@ -40,12 +40,8 @@ class CliSink implements EventSink {
       case "thinking.summary":
         out(dim(`  · ${e.summary}`) + "\n");
         break;
-      case "thinking.delta":
       case "message.delta":
-        break; // streaming deltas: v4
-      case "message.refusal":
-        out(amber(`  ${e.text}`) + "\n");
-        break;
+        break; // streamed tokens: rendered live by the web UI, not the CLI
       case "message.completed":
         out("\n" + e.text + "\n");
         break;

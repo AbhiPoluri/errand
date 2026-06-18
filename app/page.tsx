@@ -16,6 +16,8 @@ const item = {
 const EXAMPLES = [
   "Organize this folder by file type",
   "Find any duplicate files and round them up",
+  "Show me what changed in this folder recently",
+  "Find the file where I wrote about something",
   "Read my notes and summarize what they say",
 ];
 
@@ -43,6 +45,13 @@ function relativeTime(ms: number): string {
   return `${Math.round(h / 24)} days ago`;
 }
 
+// Compact label for the header model pill when the current model isn't a named preset (a custom
+// OpenRouter id or an Ollama tag) — show the last path segment, trimmed.
+function shortModel(id: string): string {
+  const tail = id.includes("/") ? id.slice(id.lastIndexOf("/") + 1) : id;
+  return tail.length > 22 ? tail.slice(0, 21) + "…" : tail;
+}
+
 export default function Page() {
   const run = useRun();
   const [input, setInput] = useState("");
@@ -66,8 +75,62 @@ export default function Page() {
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
+  const [recentQuery, setRecentQuery] = useState("");
+  const [model, setModel] = useState("");
+  const [modelPresets, setModelPresets] = useState<{ id: string; label: string }[]>([]);
+  const [endpoint, setEndpoint] = useState("openrouter");
+  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
+  const [welcomeDismissed, setWelcomeDismissed] = useState(true); // default true to avoid an SSR flash; flipped in an effect
+  const [homeLoaded, setHomeLoaded] = useState(false); // true once recent+suggestions have been fetched at least once
+
+  // Show the first-run welcome only if it hasn't been dismissed before (persisted in localStorage).
+  useEffect(() => {
+    try {
+      setWelcomeDismissed(localStorage.getItem("errand_welcome_dismissed") === "1");
+    } catch {
+      /* localStorage unavailable — leave it hidden */
+    }
+  }, []);
+
+  // The model new tasks use — shown in the header pill. Refetched when we land on Home and after
+  // Settings closes, so the pill and the Settings panel always agree.
+  useEffect(() => {
+    if (run.state.phase !== "idle") return;
+    fetch("/api/model")
+      .then((r) => r.json())
+      .then((d) => {
+        setModel(d.current ?? "");
+        setModelPresets(d.presets ?? []);
+        setEndpoint(d.endpoint ?? "openrouter");
+        setOllamaModels(d.ollamaModels ?? []);
+      })
+      .catch(() => {});
+  }, [run.state.phase, memoryOpen]);
+
+  // Quick switch of BOTH model and provider from the header in one pick. OpenRouter ids contain a
+  // "/", Ollama tags don't, so the endpoint is implied by the choice — keeping the model/provider
+  // pairing valid the same way Settings does. Finer Ollama-tag entry stays in Settings (free text).
+  const choose = async (modelId: string) => {
+    if (!modelId || modelId === model) return;
+    const nextEndpoint = modelId.includes("/") ? "openrouter" : "ollama";
+    setModel(modelId);
+    setEndpoint(nextEndpoint);
+    await fetch("/api/model", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ endpoint: nextEndpoint, model: modelId }),
+    }).catch(() => {});
+  };
+  const [, setClock] = useState(0); // ticks while idle so relative timestamps stay fresh
 
   const idle = run.state.phase === "idle";
+
+  // Re-render once a minute on Home so "just now" → "1 min ago" without a reload.
+  useEffect(() => {
+    if (!idle) return;
+    const h = setInterval(() => setClock((n) => n + 1), 60_000);
+    return () => clearInterval(h);
+  }, [idle]);
 
   const toggleSelect = (id: string) =>
     setSelected((s) => {
@@ -194,14 +257,16 @@ export default function Page() {
     if (!idle) return;
     setSelectMode(false);
     setSelected(new Set());
-    fetch("/api/runs")
-      .then((r) => r.json())
-      .then((d) => setRecent(d.runs ?? []))
-      .catch(() => {});
-    fetch("/api/memory")
-      .then((r) => r.json())
-      .then((d) => setSuggestions(d.suggestions ?? []))
-      .catch(() => {});
+    // Mark home loaded only after BOTH lists have been fetched, so the first-run welcome card never
+    // flashes for a returning user in the window before their history paints.
+    Promise.allSettled([
+      fetch("/api/runs")
+        .then((r) => r.json())
+        .then((d) => setRecent(d.runs ?? [])),
+      fetch("/api/memory")
+        .then((r) => r.json())
+        .then((d) => setSuggestions(d.suggestions ?? [])),
+    ]).finally(() => setHomeLoaded(true));
   }, [idle, memoryOpen]);
 
   const dismissSuggestion = async (id: string) => {
@@ -225,6 +290,7 @@ export default function Page() {
         onFollowUp={run.followUp}
         onUndo={run.undo}
         onReset={run.reset}
+        onRetryStart={run.retryStart}
       />
     );
   }
@@ -237,16 +303,58 @@ export default function Page() {
     setUploadErr(null);
   };
 
+  // Local (Ollama) quick-picks for the header: the models actually installed on this machine
+  // (detected via /api/tags), plus the current local tag, falling back to the documented default
+  // when Ollama isn't running or has nothing installed.
+  const ollamaTags = Array.from(
+    new Set([
+      ...(endpoint === "ollama" && model && !model.includes("/") ? [model] : []),
+      ...ollamaModels,
+      ...(ollamaModels.length ? [] : ["llama3.2:3b"]),
+    ]),
+  );
+
   return (
     <main className="mx-auto min-h-[100dvh] w-full max-w-[680px] px-6 py-7">
       <MemoryPanel open={memoryOpen} onClose={() => setMemoryOpen(false)} />
-      <div className="flex h-14 items-center justify-between">
+      <div className="flex h-14 items-center justify-between gap-3">
         <span className="text-[17px] font-semibold tracking-tight text-stone-900">Errand</span>
-        <button
-          aria-label="Memory & settings"
-          onClick={() => setMemoryOpen(true)}
-          className="text-stone-400 transition hover:text-stone-700 active:scale-95"
-        >
+        <div className="flex min-w-0 items-center gap-2">
+          {/* Model indicator + quick switcher — the closed pill shows the current model; opening it
+              switches the model new tasks use, no Settings trip. Full endpoint/custom control stays
+              in Settings. */}
+          {model && (
+            <select
+              value={model}
+              onChange={(e) => choose(e.target.value)}
+              aria-label="Model and provider for new tasks"
+              title={`${endpoint === "ollama" ? "Running locally (Ollama)" : "Running on OpenRouter (cloud)"} — switch model or provider here`}
+              className="max-w-[150px] cursor-pointer truncate rounded-full border border-stone-200/80 bg-white/70 px-3 py-1 text-[12px] font-medium text-stone-500 transition hover:border-stone-300 hover:text-stone-800 sm:max-w-[200px]"
+            >
+              <optgroup label="OpenRouter (cloud)">
+                {modelPresets.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+                {model.includes("/") && !modelPresets.some((p) => p.id === model) && (
+                  <option value={model}>{shortModel(model)}</option>
+                )}
+              </optgroup>
+              <optgroup label="Ollama (local)">
+                {ollamaTags.map((t) => (
+                  <option key={t} value={t}>
+                    {t} (local)
+                  </option>
+                ))}
+              </optgroup>
+            </select>
+          )}
+          <button
+            aria-label="Memory & settings"
+            onClick={() => setMemoryOpen(true)}
+            className="shrink-0 text-stone-400 transition hover:text-stone-700 active:scale-95"
+          >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
             <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.5" />
             <path
@@ -256,7 +364,8 @@ export default function Page() {
               strokeLinecap="round"
             />
           </svg>
-        </button>
+          </button>
+        </div>
       </div>
 
       <motion.div variants={container} initial="hidden" animate="show" className="mt-20">
@@ -293,6 +402,8 @@ export default function Page() {
         >
           <textarea
             value={input}
+            autoFocus
+            aria-label="What would you like done?"
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
@@ -338,6 +449,7 @@ export default function Page() {
                 ref={fileRef}
                 type="file"
                 multiple
+                aria-label="Attach a file"
                 className="hidden"
                 onChange={(e) => {
                   uploadFiles(Array.from(e.target.files ?? []));
@@ -379,6 +491,39 @@ export default function Page() {
             </button>
           ))}
         </motion.div>
+
+        {/* First-run welcome — only on a truly bare Home (no past runs, no ideas yet), and only
+            after the lists have loaded so it can't flash for a returning user */}
+        {!welcomeDismissed && homeLoaded && recent.length === 0 && suggestions.length === 0 && (
+          <motion.div
+            variants={item}
+            className="lift mt-4 flex items-start justify-between gap-3 rounded-2xl border border-stone-200/80 bg-white p-5"
+          >
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-stone-900">New here?</p>
+              <p className="mt-1 text-sm leading-relaxed text-stone-500">
+                I work inside one folder you pick, and I always ask before changing anything. Try one of the examples
+                above, or just tell me what you'd like done.
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                try {
+                  localStorage.setItem("errand_welcome_dismissed", "1");
+                } catch {
+                  /* ignore */
+                }
+                setWelcomeDismissed(true);
+              }}
+              aria-label="Dismiss"
+              className="shrink-0 text-stone-400 transition hover:text-stone-600"
+            >
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden>
+                <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+              </svg>
+            </button>
+          </motion.div>
+        )}
 
         {/* Ideas — proactive suggestions surfaced by dreaming */}
         {suggestions.length > 0 && (
@@ -440,6 +585,11 @@ export default function Page() {
             {scope && !scope.safe && (
               <p className="mt-2.5 text-xs text-stone-400">
                 I'll only touch files in {scope.label}, and I'll ask before changing anything.
+              </p>
+            )}
+            {scope && scope.safe && (
+              <p className="mt-2.5 text-xs text-stone-400">
+                A private folder just for Errand — drop files in here and I can work on them freely.
               </p>
             )}
           </motion.div>
@@ -587,8 +737,21 @@ export default function Page() {
                 </button>
               )}
             </div>
-            <ul className="mt-1.5">
-              {recent.map((r) => {
+            {recent.length > 5 && (
+              <input
+                value={recentQuery}
+                onChange={(e) => setRecentQuery(e.target.value)}
+                aria-label="Search past errands"
+                placeholder="Search past errands…"
+                className="mt-2 w-full rounded-lg border border-stone-200/80 bg-white/70 px-3 py-1.5 text-[13px] text-stone-700 outline-none transition focus:border-accent-600/40 placeholder:text-stone-400"
+              />
+            )}
+            {(() => {
+              const shown = recent.filter((r) => r.title.toLowerCase().includes(recentQuery.trim().toLowerCase()));
+              if (shown.length === 0) return <p className="mt-3 text-[13px] text-stone-400">No matching errands.</p>;
+              return (
+                <ul className="mt-1.5">
+                  {shown.map((r) => {
                 const isSel = selected.has(r.runId);
                 return (
                   <li key={r.runId}>
@@ -627,6 +790,11 @@ export default function Page() {
                       <span className="min-w-0 flex-1 truncate text-sm text-stone-700 transition group-hover:text-stone-900">
                         {r.title}
                       </span>
+                      {r.changeCount > 0 && (
+                        <span className="shrink-0 text-[11px] text-stone-400">
+                          {r.changeCount} change{r.changeCount === 1 ? "" : "s"}
+                        </span>
+                      )}
                       <span className="shrink-0 font-mono text-[11px] uppercase tracking-wide text-stone-400">
                         {relativeTime(r.createdAt)}
                       </span>
@@ -637,7 +805,7 @@ export default function Page() {
                             deleteRuns([r.runId]);
                           }}
                           aria-label="Delete this conversation"
-                          className="shrink-0 text-stone-300 opacity-0 transition group-hover:opacity-100 hover:text-brick-600"
+                          className="shrink-0 text-stone-400 opacity-60 transition hover:text-brick-600 sm:opacity-0 sm:group-hover:opacity-100"
                         >
                           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden>
                             <path d="M5 7h14M10 4h4M6 7l1 13h10l1-13M10 11v5M14 11v5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
@@ -648,7 +816,9 @@ export default function Page() {
                   </li>
                 );
               })}
-            </ul>
+                </ul>
+              );
+            })()}
           </motion.div>
         )}
       </motion.div>

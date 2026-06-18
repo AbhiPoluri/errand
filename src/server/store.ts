@@ -4,6 +4,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import type { AgentEvent } from "../events.ts";
+import type { OpManifest } from "../journal.ts";
 import type { RunSummary } from "./runRegistry.ts";
 import { embed, embedMany, cosineSimilarity } from "./embed.ts";
 
@@ -11,6 +12,19 @@ import { embed, embedMany, cosineSimilarity } from "./embed.ts";
 // tests point at an isolated temp file so they never touch the real errand.db.
 const g = globalThis as unknown as { __errandDb?: DatabaseSync };
 const db = (g.__errandDb ??= new DatabaseSync(process.env.ERRAND_DB ?? join(process.cwd(), "errand.db")));
+
+// Hot-path durability tuning. The agent fires an appendEvent per non-delta event, and the
+// default rollback journal + synchronous=FULL forces a full fsync on each one. WAL collapses
+// those into far fewer fsyncs and lets the SSE reader run concurrently with writes;
+// synchronous=NORMAL is the safe WAL companion; busy_timeout avoids SQLITE_BUSY when a second
+// tab reads while a run writes. Set every process (busy_timeout is per-connection; WAL persists).
+try {
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA synchronous = NORMAL");
+  db.exec("PRAGMA busy_timeout = 3000");
+} catch {
+  // A read-only or unusual filesystem may reject WAL; the default journal still works.
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS runs (
@@ -47,6 +61,15 @@ db.exec(`
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS journal (
+    runId TEXT NOT NULL,
+    opId TEXT NOT NULL,
+    op TEXT NOT NULL,
+    description TEXT NOT NULL,
+    reversibility TEXT NOT NULL,
+    manifest TEXT,
+    PRIMARY KEY (runId, opId)
+  );
 `);
 
 // Migration: add the embedding column to memories tables created before retrieval existed.
@@ -58,6 +81,15 @@ db.exec(`
     db.exec("ALTER TABLE memories ADD COLUMN embedding TEXT");
   }
 }
+
+// Expression indexes for the case-insensitive dedup lookups. addMemory/addSuggestion both do
+// `WHERE lower(text) = lower(?)`, which can't use a plain text index — so every insert was an
+// O(N) full scan, and dreaming inserts in bulk over a monotonically growing store. SQLite
+// supports indexes on expressions; these make the dedup probe an index seek.
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_memories_lower_text ON memories(lower(text));
+  CREATE INDEX IF NOT EXISTS idx_suggestions_lower_text ON suggestions(lower(text));
+`);
 
 const stmtCreate = db.prepare(
   `INSERT OR IGNORE INTO runs (runId, title, createdAt, status, roots, updatedAt) VALUES (?, ?, ?, 'working', ?, ?)`,
@@ -71,6 +103,12 @@ const stmtList = db.prepare(
 );
 const stmtEvents = db.prepare(`SELECT payload FROM events WHERE runId = ? ORDER BY seq ASC`);
 const stmtRun = db.prepare(`SELECT runId, title, createdAt, roots, messages FROM runs WHERE runId = ?`);
+const stmtAddJournal = db.prepare(
+  `INSERT OR IGNORE INTO journal (runId, opId, op, description, reversibility, manifest) VALUES (?, ?, ?, ?, ?, ?)`,
+);
+const stmtJournal = db.prepare(
+  `SELECT opId, op, description, reversibility, manifest FROM journal WHERE runId = ? ORDER BY rowid ASC`,
+);
 
 export function createRun(runId: string, title: string, createdAt: number, roots: string[]): void {
   stmtCreate.run(runId, title, createdAt, JSON.stringify(roots), Date.now());
@@ -98,13 +136,68 @@ export function listRunSummaries(): RunSummary[] {
   }));
 }
 
+// Parse persisted JSON without ever throwing: a single truncated/corrupt blob (a crash
+// mid-write, a disk glitch) must degrade gracefully, not take down a route or block boot.
+function safeParse<T>(s: unknown, fallback: T): T {
+  if (typeof s !== "string") return fallback;
+  try {
+    return JSON.parse(s) as T;
+  } catch {
+    return fallback;
+  }
+}
+
 export function getEvents(runId: string): AgentEvent[] {
-  return (stmtEvents.all(runId) as any[]).map((r) => JSON.parse(r.payload) as AgentEvent);
+  const out: AgentEvent[] = [];
+  for (const r of stmtEvents.all(runId) as any[]) {
+    const e = safeParse<AgentEvent | null>(r.payload, null);
+    if (e) out.push(e);
+    else console.warn(`[store] skipping unparseable event for run ${runId}`);
+  }
+  return out;
+}
+
+// ---- journal manifest (so Undo survives a restart / a run falling out of memory) ----
+// A serializable record of each reversible op a run performed, enough to RECONSTRUCT its
+// inverse after the in-memory Journal (with its live closures) is gone. The live path still
+// uses the in-memory closures; this is the restart fallback. INSERT OR IGNORE keyed by
+// (runId, opId) makes re-persisting a run's journal each turn idempotent.
+export interface JournalOp {
+  opId: string;
+  op: string;
+  description: string;
+  reversibility: string;
+  manifest: OpManifest | null; // parsed back from JSON; null if absent/corrupt
+}
+
+export function appendJournalOp(
+  runId: string,
+  rec: { opId: string; op: string; description: string; reversibility: string; manifest?: OpManifest | null },
+): void {
+  stmtAddJournal.run(
+    runId,
+    rec.opId,
+    rec.op,
+    rec.description,
+    rec.reversibility,
+    rec.manifest != null ? JSON.stringify(rec.manifest) : null,
+  );
+}
+
+export function getJournalOps(runId: string): JournalOp[] {
+  return (stmtJournal.all(runId) as any[]).map((r) => ({
+    opId: r.opId,
+    op: r.op,
+    description: r.description,
+    reversibility: r.reversibility,
+    manifest: safeParse<OpManifest | null>(r.manifest, null),
+  }));
 }
 
 // Permanently remove a run and its full event stream (user clears it from Recently).
 export function deleteRun(runId: string): void {
   db.prepare("DELETE FROM events WHERE runId = ?").run(runId);
+  db.prepare("DELETE FROM journal WHERE runId = ?").run(runId);
   db.prepare("DELETE FROM runs WHERE runId = ?").run(runId);
 }
 
@@ -117,8 +210,8 @@ export function getStoredRun(
     runId: r.runId,
     title: r.title,
     createdAt: r.createdAt,
-    roots: JSON.parse(r.roots),
-    messages: JSON.parse(r.messages),
+    roots: safeParse<string[]>(r.roots, []),
+    messages: safeParse<any[]>(r.messages, []),
   };
 }
 

@@ -17,12 +17,7 @@ import {
   statSync,
 } from "node:fs";
 import { join, dirname } from "node:path";
-
-// Human phrasing for a move/copy: "into <folder>" when relocating, "to <name>" when renaming.
-function relocationPhrase(verb: string, from: string, to: string): string {
-  const sameDir = dirname(from) === dirname(to);
-  return sameDir ? `${verb} ${name(from)} to ${name(to)}` : `${verb} ${name(from)} into ${name(dirname(to))}`;
-}
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { Tool, ToolResult } from "./index.ts";
 import {
@@ -36,19 +31,27 @@ import {
   PathError,
 } from "./fileutil.ts";
 import { docKindFor, extractDocument, isImageFile, ocrImage } from "./extract.ts";
+import { extractZip } from "./zip.ts";
+
+// Human phrasing for a move/copy: "into <folder>" when relocating, "to <name>" when renaming.
+function relocationPhrase(verb: string, from: string, to: string): string {
+  const sameDir = dirname(from) === dirname(to);
+  return sameDir ? `${verb} ${name(from)} to ${name(to)}` : `${verb} ${name(from)} into ${name(dirname(to))}`;
+}
 
 // Reached only for non-image binaries (images route to OCR first) — keep it generic.
 function binaryRefusal(): string {
   return "That file isn't text, so I can't read it.";
 }
 
-function fail(e: unknown): ToolResult {
+// Returns ToolResult<never> (it never sets `data`), so it's assignable to any tool's ToolResult<D>.
+function fail(e: unknown): ToolResult<never> {
   if (e instanceof PathError) return { ok: false, error: "path", summary: e.userSummary };
   return { ok: false, error: String((e as any)?.message ?? e) };
 }
 
 // ---- list_files (read-only) ----
-export const listFiles: Tool<{ dir?: string }> = {
+export const listFiles: Tool<{ dir?: string }, { name: string; kind: string; size: number }[]> = {
   name: "list_files",
   modelDescription: "List the files and folders inside a directory. Read-only.",
   jsonSchema: {
@@ -59,7 +62,7 @@ export const listFiles: Tool<{ dir?: string }> = {
   argsSchema: z.object({ dir: z.string().optional() }),
   gated: false,
   describe: (a) => ({ action: `Looking at what's in ${a.dir ? name(a.dir) : "the folder"}`, reversibility: "reversible" }),
-  summarize: (r) => (r.ok ? `Found ${(r.data as any[])?.length ?? 0} item(s).` : "I couldn't open that folder."),
+  summarize: (r) => (r.ok ? `Found ${r.data?.length ?? 0} item(s).` : "I couldn't open that folder."),
   run: async (a, ctx) => {
     try {
       const abs = resolveWithin(ctx.roots, a.dir ?? ".");
@@ -80,7 +83,10 @@ export const listFiles: Tool<{ dir?: string }> = {
 };
 
 // ---- read_file (read-only) ----
-export const readFile: Tool<{ path: string }> = {
+export const readFile: Tool<
+  { path: string },
+  { path: string; text: string; truncated: boolean; kind?: string; pages?: number }
+> = {
   name: "read_file",
   modelDescription:
     "Read the text of a file — plain text, code, CSV, Markdown, a PDF, a Word (.docx) document, or an Excel (.xlsx) spreadsheet. Read-only; PDFs, Word docs, and spreadsheets are converted to text automatically. It can also pull text out of an image or photo (a screenshot, a scan, a picture of a page) via OCR. Other non-text files can't be read.",
@@ -95,9 +101,8 @@ export const readFile: Tool<{ path: string }> = {
   describe: (a) => ({ action: `Reading ${name(a.path)}`, reversibility: "reversible" }),
   summarize: (r) => {
     if (!r.ok) return r.summary ?? "I couldn't read that file.";
-    const d = r.data as any;
-    const where = name(d?.path ?? "the file");
-    return d?.pages ? `Read ${where} (${d.pages} page${d.pages === 1 ? "" : "s"}).` : `Read ${where}.`;
+    const where = name(r.data?.path ?? "the file");
+    return r.data?.pages ? `Read ${where} (${r.data.pages} page${r.data.pages === 1 ? "" : "s"}).` : `Read ${where}.`;
   },
   run: async (a, ctx) => {
     try {
@@ -147,7 +152,7 @@ export const readFile: Tool<{ path: string }> = {
 };
 
 // ---- write_file (gated, reversible) ----
-export const writeFile: Tool<{ path: string; content: string }> = {
+export const writeFile: Tool<{ path: string; content: string }, { path: string }> = {
   name: "write_file",
   modelDescription: "Create or overwrite a text file with the given content.",
   jsonSchema: {
@@ -176,19 +181,34 @@ export const writeFile: Tool<{ path: string; content: string }> = {
       reversibility: "reversible",
     };
   },
-  summarize: (r) => (r.ok ? `Saved ${name((r.data as any)?.path ?? "the file")}.` : (r.summary ?? "I couldn't save that file.")),
+  summarize: (r) => (r.ok ? `Saved ${name(r.data?.path ?? "the file")}.` : (r.summary ?? "I couldn't save that file.")),
   run: async (a, ctx) => {
     try {
       const abs = resolveWithin(ctx.roots, a.path);
       const existedBefore = exists(abs);
       if (existedBefore) assertRealWithin(ctx.roots, abs);
       const prior = existedBefore ? readFileSync(abs) : null;
+      // Snapshot prior bytes to disk so this write is undoable even AFTER a restart (when the
+      // in-memory `prior` buffer is gone). Best-effort: if snapshotting fails, snapshot stays
+      // null and restart-undo refuses to touch the file rather than risk deleting it.
+      let snapshot: string | null = null;
+      if (prior !== null) {
+        try {
+          const snapDir = join(ctx.workspaceRoot, ".errand-review", ctx.runId, ".snapshots");
+          mkdirSync(snapDir, { recursive: true });
+          snapshot = join(snapDir, crypto.randomUUID());
+          writeFileSync(snapshot, prior);
+        } catch {
+          snapshot = null;
+        }
+      }
       mkdirSync(dirname(abs), { recursive: true });
       writeFileSync(abs, a.content, "utf8");
       ctx.journal.record({
         op: "write",
         description: `${existedBefore ? "Updated" : "Created"} ${name(abs)}`,
         reversibility: "reversible",
+        manifest: { kind: "write", path: abs, wasNew: !existedBefore, snapshot },
         inverse: async () => {
           if (prior === null) rmSync(abs, { force: true });
           else writeFileSync(abs, prior);
@@ -204,7 +224,7 @@ export const writeFile: Tool<{ path: string; content: string }> = {
 // ---- make_folder (gated, reversible) — the structured way to create a folder, so
 // the model never reaches for bash `mkdir`. Inverse removes the folder only if it's
 // still empty (never deletes a folder the user later filled). ----
-export const makeFolder: Tool<{ path: string }> = {
+export const makeFolder: Tool<{ path: string }, { path: string }> = {
   name: "make_folder",
   modelDescription: "Create a new, empty folder. Use this instead of a shell command to make folders.",
   jsonSchema: {
@@ -221,7 +241,7 @@ export const makeFolder: Tool<{ path: string }> = {
     consequences: "You can undo this.",
     reversibility: "reversible",
   }),
-  summarize: (r) => (r.ok ? `Made the folder ${name((r.data as any)?.path ?? "")}.` : (r.summary ?? "I couldn't make that folder.")),
+  summarize: (r) => (r.ok ? `Made the folder ${name(r.data?.path ?? "")}.` : (r.summary ?? "I couldn't make that folder.")),
   run: async (a, ctx) => {
     try {
       const abs = resolveWithin(ctx.roots, a.path);
@@ -231,6 +251,7 @@ export const makeFolder: Tool<{ path: string }> = {
         op: "make_folder",
         description: `Made the folder ${name(abs)}`,
         reversibility: "reversible",
+        manifest: { kind: "make_folder", path: abs },
         inverse: async () => {
           try {
             rmdirSync(abs); // removes only if still empty; throws (and we leave it) if filled
@@ -247,9 +268,10 @@ export const makeFolder: Tool<{ path: string }> = {
 };
 
 // ---- move (gated, reversible) ----
-export const moveFile: Tool<{ from: string; to: string }> = {
+export const moveFile: Tool<{ from: string; to: string }, { from: string; to: string }> = {
   name: "move_file",
-  modelDescription: "Move or rename a file or folder. Refuses if the destination already exists.",
+  modelDescription:
+    "Move a file or folder to a different folder. To rename a file or folder in place (same folder, new name), use rename_file instead. Refuses if the destination already exists.",
   jsonSchema: {
     type: "object",
     additionalProperties: false,
@@ -267,7 +289,7 @@ export const moveFile: Tool<{ from: string; to: string }> = {
     consequences: "You can undo this.",
     reversibility: "reversible",
   }),
-  summarize: (r) => (r.ok ? `Moved ${name((r.data as any)?.from ?? "it")}.` : (r.summary ?? "I couldn't move that.")),
+  summarize: (r) => (r.ok ? `Moved ${name(r.data?.from ?? "it")}.` : (r.summary ?? "I couldn't move that.")),
   run: async (a, ctx) => {
     try {
       const from = resolveWithin(ctx.roots, a.from);
@@ -281,6 +303,7 @@ export const moveFile: Tool<{ from: string; to: string }> = {
         op: "move",
         description: `Moved ${name(from)} to ${name(to)}`,
         reversibility: "reversible",
+        manifest: { kind: "move", from, to },
         inverse: async () => renameSync(to, from),
       });
       return { ok: true, data: { from, to } };
@@ -291,7 +314,7 @@ export const moveFile: Tool<{ from: string; to: string }> = {
 };
 
 // ---- copy (gated, reversible) ----
-export const copyFile: Tool<{ from: string; to: string }> = {
+export const copyFile: Tool<{ from: string; to: string }, { from: string; to: string }> = {
   name: "copy_file",
   modelDescription: "Copy a file or folder to a new location. Refuses if the destination already exists.",
   jsonSchema: {
@@ -311,7 +334,7 @@ export const copyFile: Tool<{ from: string; to: string }> = {
     consequences: "You can undo this.",
     reversibility: "reversible",
   }),
-  summarize: (r) => (r.ok ? `Copied ${name((r.data as any)?.from ?? "it")}.` : (r.summary ?? "I couldn't copy that.")),
+  summarize: (r) => (r.ok ? `Copied ${name(r.data?.from ?? "it")}.` : (r.summary ?? "I couldn't copy that.")),
   run: async (a, ctx) => {
     try {
       const from = resolveWithin(ctx.roots, a.from);
@@ -325,6 +348,7 @@ export const copyFile: Tool<{ from: string; to: string }> = {
         op: "copy",
         description: `Copied ${name(from)} to ${name(to)}`,
         reversibility: "reversible",
+        manifest: { kind: "copy", to },
         inverse: async () => rmSync(to, { recursive: true, force: true }),
       });
       return { ok: true, data: { from, to } };
@@ -335,7 +359,7 @@ export const copyFile: Tool<{ from: string; to: string }> = {
 };
 
 // ---- delete (gated, reversible via Review folder — NEVER unlink) ----
-export const deleteFile: Tool<{ path: string }> = {
+export const deleteFile: Tool<{ path: string }, { original: string; review: string }> = {
   name: "delete_file",
   modelDescription:
     "Remove a file or folder. It is moved to a Review folder (recoverable), never permanently deleted.",
@@ -354,7 +378,7 @@ export const deleteFile: Tool<{ path: string }> = {
     reversibility: "reversible",
   }),
   summarize: (r) =>
-    r.ok ? `Moved ${name((r.data as any)?.original ?? "it")} to a Review folder.` : (r.summary ?? "I couldn't remove that."),
+    r.ok ? `Moved ${name(r.data?.original ?? "it")} to a Review folder.` : (r.summary ?? "I couldn't remove that."),
   run: async (a, ctx) => {
     try {
       const abs = resolveWithin(ctx.roots, a.path);
@@ -362,12 +386,18 @@ export const deleteFile: Tool<{ path: string }> = {
       if (!exists(abs)) return { ok: false, error: "missing", summary: "I couldn't find that to remove." };
       const reviewDir = join(ctx.workspaceRoot, ".errand-review", ctx.runId);
       mkdirSync(reviewDir, { recursive: true });
-      const dest = join(reviewDir, name(abs));
+      // Disambiguate by basename: deleting two files that share a name (a/notes.txt,
+      // b/notes.txt) must NOT have the second renameSync clobber the first parked copy —
+      // that would lose the first file's bytes and make its undo restore the wrong content.
+      const base = join(reviewDir, name(abs));
+      let dest = base;
+      for (let n = 1; exists(dest); n++) dest = `${base}.${n}`;
       renameSync(abs, dest);
       ctx.journal.record({
         op: "delete",
         description: `Moved ${name(abs)} to the Review folder`,
         reversibility: "reversible",
+        manifest: { kind: "delete", from: abs, dest },
         inverse: async () => renameSync(dest, abs),
       });
       return { ok: true, data: { original: abs, review: dest } };
@@ -377,4 +407,574 @@ export const deleteFile: Tool<{ path: string }> = {
   },
 };
 
-export const fileTools = [listFiles, readFile, makeFolder, writeFile, moveFile, copyFile, deleteFile];
+// ---- rename_file (gated, reversible) — rename in place within the same folder ----
+// Distinct from move_file: non-technical users say "rename", and a bare-basename rename can't
+// relocate or escape scope, so it reads honestly in the timeline ("Rename X to Y", not "Move").
+export const renameFile: Tool<{ path: string; newName: string }, { from: string; to: string }> = {
+  name: "rename_file",
+  modelDescription:
+    "Rename a file or folder in place (it stays in the same folder). Give just the new name, not a path.",
+  jsonSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["path", "newName"],
+    properties: {
+      path: { type: "string", description: "The file or folder to rename." },
+      newName: { type: "string", description: "The new name only — no slashes, no folders." },
+    },
+  },
+  argsSchema: z.object({
+    path: z.string().min(1),
+    // A bare basename: no path separators, and not a "." / ".." segment. The slash bans make
+    // traversal impossible, so only the two literal traversal segments need rejecting — a ".."
+    // SUBSTRING (e.g. "data..clean.csv") is a perfectly valid filename. resolveWithin re-checks scope.
+    newName: z
+      .string()
+      .min(1)
+      .refine((n) => !n.includes("/") && !n.includes("\\") && n !== "." && n !== "..", {
+        message: "must be a plain name, not a path",
+      }),
+  }),
+  gated: true,
+  describe: (a) => ({
+    action: `Rename ${name(a.path)} to ${a.newName}`,
+    items: [name(a.path)],
+    consequences: "You can undo this.",
+    reversibility: "reversible",
+  }),
+  summarize: (r) => (r.ok ? `Renamed to ${name(r.data?.to ?? "")}.` : (r.summary ?? "I couldn't rename that.")),
+  run: async (a, ctx) => {
+    try {
+      const from = resolveWithin(ctx.roots, a.path);
+      assertRealWithin(ctx.roots, from);
+      if (!exists(from)) return { ok: false, error: "missing", summary: "I couldn't find that to rename." };
+      const to = join(dirname(from), a.newName);
+      resolveWithin(ctx.roots, to); // re-confirm the new name still lands inside an allowed root
+      if (exists(to)) return { ok: false, error: "collision", summary: "Something with that name is already there, so I left it alone." };
+      renameSync(from, to);
+      ctx.journal.record({
+        op: "move",
+        description: `Renamed ${name(from)} to ${a.newName}`,
+        reversibility: "reversible",
+        manifest: { kind: "move", from, to },
+        inverse: async () => renameSync(to, from),
+      });
+      return { ok: true, data: { from, to } };
+    } catch (e) {
+      return fail(e);
+    }
+  },
+};
+
+// ---- folder_summary (read-only) — bounded recursive disk-usage so "what's taking up
+// space?" / "free up room" works (list_files only sees one level). Strictly read-only. ----
+function humanBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
+}
+
+export const folderSummary: Tool<
+  { dir?: string },
+  {
+    dir: string;
+    totalFiles: number;
+    totalBytes: number;
+    truncated: boolean;
+    largestFiles: { path: string; size: number }[];
+    largestSubfolders: { name: string; bytes: number }[];
+    byType: { ext: string; bytes: number; count: number }[];
+  }
+> = {
+  name: "folder_summary",
+  modelDescription:
+    "Summarize how much space a folder uses, recursively: total size, the biggest files, the biggest sub-folders, and a breakdown by file type. Read-only. Use this for 'what's taking up space' or 'help me free up room'.",
+  jsonSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: { dir: { type: "string", description: "Folder to summarize (default: the working folder)." } },
+  },
+  argsSchema: z.object({ dir: z.string().optional() }),
+  gated: false,
+  describe: (a) => ({ action: `Sizing up ${a.dir ? name(a.dir) : "the folder"}`, reversibility: "reversible" }),
+  summarize: (r) => {
+    if (!r.ok) return r.summary ?? "I couldn't size up that folder.";
+    const big = r.data?.largestFiles?.[0];
+    const tail = big ? `, biggest is ${name(big.path)} (${humanBytes(big.size)})` : "";
+    const partial = r.data?.truncated ? " (this folder was too big to measure completely)" : "";
+    return `Looked through ${name(r.data?.dir ?? "the folder")} — ${r.data?.totalFiles ?? 0} file(s), ${humanBytes(r.data?.totalBytes ?? 0)}${tail}${partial}.`;
+  },
+  run: async (a, ctx) => {
+    try {
+      const root = resolveWithin(ctx.roots, a.dir ?? ".");
+      assertRealWithin(ctx.roots, root);
+      const MAX_NODES = Number(process.env.ERRAND_MAX_NODES) || 20_000; // walk budget — flag truncated, don't hang
+      const MAX_DEPTH = 8;
+      const TOP = 5;
+      let nodes = 0;
+      let totalBytes = 0;
+      let totalFiles = 0;
+      let truncated = false;
+      const byExt = new Map<string, { bytes: number; count: number }>();
+      const largest: { path: string; size: number }[] = [];
+
+      const tallyFile = (full: string, fname: string): number => {
+        let size = 0;
+        try {
+          size = statSync(full).size;
+        } catch {
+          return 0; // unreadable — skip
+        }
+        totalFiles++;
+        totalBytes += size;
+        const dot = fname.lastIndexOf(".");
+        const ext = dot > 0 ? fname.slice(dot).toLowerCase() : "(no extension)";
+        const e = byExt.get(ext) ?? { bytes: 0, count: 0 };
+        e.bytes += size;
+        e.count++;
+        byExt.set(ext, e);
+        largest.push({ path: full, size });
+        return size;
+      };
+
+      // Returns total bytes under `dir`. Bounded by node budget + depth.
+      const walk = (dir: string, depth: number): number => {
+        if (truncated || depth > MAX_DEPTH) return 0;
+        let entries: import("node:fs").Dirent[];
+        try {
+          entries = readdirSync(dir, { withFileTypes: true });
+        } catch {
+          return 0; // unreadable folder — skip
+        }
+        let bytes = 0;
+        for (const d of entries) {
+          if (d.isDirectory() && d.name === ".errand-review") continue; // Errand's own undo store
+          if (nodes >= MAX_NODES) {
+            truncated = true;
+            break;
+          }
+          nodes++;
+          const full = join(dir, d.name);
+          if (d.isDirectory()) bytes += walk(full, depth + 1);
+          else if (d.isFile()) bytes += tallyFile(full, d.name);
+        }
+        return bytes;
+      };
+
+      // Top level: track each immediate sub-folder's recursive size separately.
+      let top: import("node:fs").Dirent[];
+      try {
+        top = readdirSync(root, { withFileTypes: true });
+      } catch {
+        return { ok: false, error: "missing", summary: "I couldn't open that folder." };
+      }
+      const subfolders: { name: string; bytes: number }[] = [];
+      for (const d of top) {
+        if (d.isDirectory() && d.name === ".errand-review") continue; // don't count our own undo store
+        if (nodes >= MAX_NODES) {
+          truncated = true;
+          break;
+        }
+        nodes++;
+        const full = join(root, d.name);
+        if (d.isDirectory()) subfolders.push({ name: d.name, bytes: walk(full, 1) });
+        else if (d.isFile()) tallyFile(full, d.name);
+      }
+
+      largest.sort((x, y) => y.size - x.size);
+      subfolders.sort((x, y) => y.bytes - x.bytes);
+      const byType = [...byExt.entries()]
+        .map(([ext, v]) => ({ ext, bytes: v.bytes, count: v.count }))
+        .sort((x, y) => y.bytes - x.bytes)
+        .slice(0, 10);
+
+      return {
+        ok: true,
+        data: {
+          dir: root,
+          totalFiles,
+          totalBytes,
+          truncated,
+          largestFiles: largest.slice(0, TOP),
+          largestSubfolders: subfolders.slice(0, TOP),
+          byType,
+        },
+      };
+    } catch (e) {
+      return fail(e);
+    }
+  },
+};
+
+// ---- find_duplicates (read-only) — backs the "find duplicate files" example chip. Groups by
+// size first (cheap), then content-hashes only the size-collisions so it never reads the whole
+// tree. Read-only: it REPORTS duplicate sets; the agent uses move_file/delete_file to act. ----
+export const findDuplicates: Tool<
+  { dir?: string },
+  {
+    dir: string;
+    groups: { size: number; paths: string[]; keeper: string; wastedBytes: number }[];
+    wastedBytes: number;
+    truncated: boolean;
+  }
+> = {
+  name: "find_duplicates",
+  modelDescription:
+    "Find sets of duplicate files (byte-for-byte identical) inside a folder, recursively. Read-only — it reports the duplicate groups and which copy to keep; use move_file/delete_file to round them up.",
+  jsonSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: { dir: { type: "string", description: "Folder to scan (default: the working folder)." } },
+  },
+  argsSchema: z.object({ dir: z.string().optional() }),
+  gated: false,
+  describe: (a) => ({ action: `Looking for duplicate files in ${a.dir ? name(a.dir) : "the folder"}`, reversibility: "reversible" }),
+  summarize: (r) => {
+    if (!r.ok) return r.summary ?? "I couldn't scan for duplicates.";
+    const sets = r.data?.groups?.length ?? 0;
+    const trunc = r.data?.truncated;
+    if (sets === 0) {
+      return trunc
+        ? "No duplicates found in the part I could scan — the folder was too big to check all of it."
+        : "No duplicate files found.";
+    }
+    const base = `Found ${sets} set${sets === 1 ? "" : "s"} of duplicates — about ${humanBytes(r.data?.wastedBytes ?? 0)} could be freed`;
+    return trunc ? `${base}, and there may be more I couldn't reach.` : `${base}.`;
+  },
+  run: async (a, ctx) => {
+    try {
+      const root = resolveWithin(ctx.roots, a.dir ?? ".");
+      assertRealWithin(ctx.roots, root);
+      const MAX_NODES = Number(process.env.ERRAND_MAX_NODES) || 20_000;
+      const MAX_DEPTH = 8;
+      let nodes = 0;
+      let truncated = false;
+      const bySize = new Map<number, string[]>(); // candidate paths grouped by exact size
+
+      const walk = (dir: string, depth: number): void => {
+        if (truncated || depth > MAX_DEPTH) return;
+        let entries: import("node:fs").Dirent[];
+        try {
+          entries = readdirSync(dir, { withFileTypes: true });
+        } catch {
+          return;
+        }
+        for (const d of entries) {
+          if (d.isDirectory() && d.name === ".errand-review") continue; // our own undo store
+          if (nodes >= MAX_NODES) {
+            truncated = true;
+            return;
+          }
+          nodes++;
+          const full = join(dir, d.name);
+          if (d.isDirectory()) walk(full, depth + 1);
+          else if (d.isFile()) {
+            let size = 0;
+            try {
+              size = statSync(full).size;
+            } catch {
+              continue;
+            }
+            if (size === 0 || size > MAX_FILE_BYTES) continue; // empties never "duplicate"; huge files skipped
+            const arr = bySize.get(size) ?? [];
+            arr.push(full);
+            bySize.set(size, arr);
+          }
+        }
+      };
+      walk(root, 0);
+
+      // Only hash files whose SIZE collides — identical files must share a size, so this avoids
+      // reading the whole tree.
+      const groups: { size: number; paths: string[]; keeper: string; wastedBytes: number }[] = [];
+      let wastedBytes = 0;
+      for (const [size, paths] of bySize) {
+        if (paths.length < 2) continue;
+        const byHash = new Map<string, string[]>();
+        for (const p of paths) {
+          let h: string;
+          try {
+            h = createHash("sha1").update(readFileSync(p)).digest("hex");
+          } catch {
+            continue;
+          }
+          const arr = byHash.get(h) ?? [];
+          arr.push(p);
+          byHash.set(h, arr);
+        }
+        for (const dupes of byHash.values()) {
+          if (dupes.length < 2) continue;
+          // keeper = shortest path (the "original" tends to live in a shallower/cleaner spot).
+          const keeper = dupes.slice().sort((x, y) => x.length - y.length)[0];
+          const wasted = size * (dupes.length - 1);
+          wastedBytes += wasted;
+          groups.push({ size, paths: dupes, keeper, wastedBytes: wasted });
+        }
+      }
+      groups.sort((x, y) => y.wastedBytes - x.wastedBytes);
+      return { ok: true, data: { dir: root, groups, wastedBytes, truncated } };
+    } catch (e) {
+      return fail(e);
+    }
+  },
+};
+
+// Parse a human "within" hint into a cutoff timestamp (ms), or undefined for no limit.
+function withinCutoff(within?: string): number | undefined {
+  if (!within) return undefined;
+  const w = within.trim().toLowerCase();
+  if (w.includes("today")) {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  }
+  if (w.includes("yesterday")) return Date.now() - 86_400_000;
+  if (w.includes("hour")) return Date.now() - 3_600_000;
+  if (w.includes("week")) return Date.now() - 7 * 86_400_000;
+  if (w.includes("month")) return Date.now() - 30 * 86_400_000;
+  const days = Number(w.replace(/[^0-9.]/g, ""));
+  // Unrecognized vague phrases ("recently", "lately") → no limit (newest-first across all time),
+  // which is the sensible reading of those words.
+  return days > 0 ? Date.now() - days * 86_400_000 : undefined;
+}
+
+// ---- recent_changes (read-only) — "what did I just download / change?" Distinct from
+// folder_summary (size) and find_duplicates (identity); the natural precursor to a cleanup. ----
+export const recentChanges: Tool<
+  { dir?: string; within?: string },
+  { dir: string; files: { path: string; size: number; modifiedAt: number }[]; truncated: boolean }
+> = {
+  name: "recent_changes",
+  modelDescription:
+    "List the files changed most recently in a folder (newest first), looking through sub-folders too. Read-only. Optionally limit to 'today', 'this week', or a number of days.",
+  jsonSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      dir: { type: "string", description: "Folder to look in (default: the working folder)." },
+      within: { type: "string", description: "Optional time window: 'today', 'this week', or a number of days." },
+    },
+  },
+  argsSchema: z.object({ dir: z.string().optional(), within: z.string().optional() }),
+  gated: false,
+  describe: (a) => ({ action: `Looking at what changed recently in ${a.dir ? name(a.dir) : "the folder"}`, reversibility: "reversible" }),
+  summarize: (r) => {
+    if (!r.ok) return r.summary ?? "I couldn't check recent changes.";
+    const n = r.data?.files?.length ?? 0;
+    return r.data?.truncated
+      ? `Found ${n} recently-changed file(s) — the folder was too big to look through all of it, so there may be newer ones I didn't reach.`
+      : `Found ${n} recently-changed file(s).`;
+  },
+  run: async (a, ctx) => {
+    try {
+      const root = resolveWithin(ctx.roots, a.dir ?? ".");
+      assertRealWithin(ctx.roots, root);
+      const MAX_NODES = Number(process.env.ERRAND_MAX_NODES) || 20_000;
+      const MAX_DEPTH = 8;
+      const TOP = 20;
+      let nodes = 0;
+      let truncated = false;
+      const all: { path: string; size: number; modifiedAt: number }[] = [];
+      const walk = (dir: string, depth: number): void => {
+        if (truncated || depth > MAX_DEPTH) return;
+        let entries: import("node:fs").Dirent[];
+        try {
+          entries = readdirSync(dir, { withFileTypes: true });
+        } catch {
+          return;
+        }
+        for (const d of entries) {
+          if (d.isDirectory() && d.name === ".errand-review") continue;
+          if (nodes >= MAX_NODES) {
+            truncated = true;
+            return;
+          }
+          nodes++;
+          const full = join(dir, d.name);
+          if (d.isDirectory()) walk(full, depth + 1);
+          else if (d.isFile()) {
+            try {
+              const st = statSync(full);
+              all.push({ path: full, size: st.size, modifiedAt: st.mtimeMs });
+            } catch {
+              /* unreadable — skip */
+            }
+          }
+        }
+      };
+      walk(root, 0);
+      const cutoff = withinCutoff(a.within);
+      const files = all
+        .filter((f) => cutoff === undefined || f.modifiedAt >= cutoff)
+        .sort((x, y) => y.modifiedAt - x.modifiedAt)
+        .slice(0, TOP);
+      return { ok: true, data: { dir: root, files, truncated } };
+    } catch (e) {
+      return fail(e);
+    }
+  },
+};
+
+// ---- find_files (read-only) — locate a file by NAME or by what's WRITTEN INSIDE it. Content
+// search reuses read_file's extraction path (text/CSV/MD directly; PDF/docx/xlsx via
+// extractDocument), so "find the letter where I mentioned the insurance claim" works. ----
+export const findFiles: Tool<
+  { query: string; dir?: string; mode?: "name" | "content" | "both" },
+  { dir: string; matches: { path: string; via: "name" | "content"; snippet?: string }[]; truncated: boolean; skipped: number }
+> = {
+  name: "find_files",
+  modelDescription:
+    "Find files in a folder by their name OR by what's written inside them (text, CSV, Markdown, PDF, Word, Excel). Read-only — use it to LOCATE a file when you don't know exactly where it is; then read or act on it. Optional mode: 'name', 'content', or 'both' (default).",
+  jsonSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["query"],
+    properties: {
+      query: { type: "string", description: "What to look for — a word/phrase in the name or the contents." },
+      dir: { type: "string", description: "Folder to search (default: the working folder)." },
+      mode: { type: "string", enum: ["name", "content", "both"], description: "Where to look (default: both)." },
+    },
+  },
+  argsSchema: z.object({
+    query: z.string().min(1),
+    dir: z.string().optional(),
+    mode: z.enum(["name", "content", "both"]).optional(),
+  }),
+  gated: false,
+  describe: (a) => ({ action: `Searching ${a.dir ? name(a.dir) : "the folder"} for "${a.query.slice(0, 50)}"`, reversibility: "reversible" }),
+  summarize: (r) => {
+    if (!r.ok) return r.summary ?? "I couldn't search those files.";
+    const n = r.data?.matches?.length ?? 0;
+    const parts: string[] = [];
+    if (r.data?.truncated) parts.push("the folder was too big to search all of it");
+    if (r.data?.skipped) parts.push(`${r.data.skipped} file(s) couldn't be searched`);
+    const tail = parts.length ? ` (${parts.join("; ")})` : "";
+    return n ? `Found ${n} matching file(s)${tail}.` : `No matching files found${tail}.`;
+  },
+  run: async (a, ctx) => {
+    try {
+      const root = resolveWithin(ctx.roots, a.dir ?? ".");
+      assertRealWithin(ctx.roots, root);
+      const mode = a.mode ?? "both";
+      const q = a.query.toLowerCase();
+      const MAX_NODES = Number(process.env.ERRAND_MAX_NODES) || 20_000;
+      const MAX_DEPTH = 8;
+      const MAX_MATCHES = 50;
+      const MAX_CONTENT_SCANS = 400; // bound how many files we OPEN+extract for content search
+      let nodes = 0;
+      let contentScans = 0;
+      let truncated = false;
+      let skipped = 0;
+      const matches: { path: string; via: "name" | "content"; snippet?: string }[] = [];
+
+      const scanContent = async (full: string): Promise<void> => {
+        if (ctx.signal.aborted) {
+          truncated = true;
+          return;
+        }
+        let size: number;
+        try {
+          size = statSync(full).size;
+        } catch {
+          skipped++;
+          return;
+        }
+        if (size > MAX_FILE_BYTES) {
+          skipped++; // cheap reject (statSync only) — doesn't burn the open budget
+          return;
+        }
+        if (contentScans >= MAX_CONTENT_SCANS) {
+          truncated = true;
+          return;
+        }
+        contentScans++; // count files we actually OPEN (the expensive part we bound)
+        let buf: Buffer;
+        try {
+          buf = readFileSync(full);
+        } catch {
+          skipped++;
+          return;
+        }
+        let text: string | null = null;
+        const kind = docKindFor(full, buf);
+        if (kind) {
+          const doc = await extractDocument(kind, buf);
+          text = doc?.text ?? null;
+        } else if (isImageFile(full, buf)) {
+          skipped++; // images would need OCR (~seconds each) — too slow to scan in bulk
+          return;
+        } else if (!isBinary(buf)) {
+          text = buf.subarray(0, MAX_READ_BYTES).toString("utf8"); // cap like read_file — don't stringify 50MB
+        }
+        if (text == null) {
+          skipped++;
+          return;
+        }
+        const idx = text.toLowerCase().indexOf(q);
+        if (idx >= 0) {
+          const snippet = text.slice(Math.max(0, idx - 60), idx + q.length + 60).replace(/\s+/g, " ").trim();
+          matches.push({ path: full, via: "content", snippet });
+        }
+      };
+
+      const walk = async (dir: string, depth: number): Promise<void> => {
+        if (ctx.signal.aborted) {
+          truncated = true;
+          return;
+        }
+        if (truncated || depth > MAX_DEPTH || matches.length >= MAX_MATCHES) return;
+        let entries: import("node:fs").Dirent[];
+        try {
+          entries = readdirSync(dir, { withFileTypes: true });
+        } catch {
+          return;
+        }
+        for (const d of entries) {
+          if (matches.length >= MAX_MATCHES) return;
+          if (d.isDirectory() && d.name === ".errand-review") continue;
+          if (nodes >= MAX_NODES) {
+            truncated = true;
+            return;
+          }
+          nodes++;
+          const full = join(dir, d.name);
+          if (d.isDirectory()) {
+            await walk(full, depth + 1);
+          } else if (d.isFile()) {
+            if (mode !== "content" && d.name.toLowerCase().includes(q)) {
+              matches.push({ path: full, via: "name" });
+            } else if (mode !== "name") {
+              await scanContent(full);
+            }
+          }
+        }
+      };
+      await walk(root, 0);
+      return { ok: true, data: { dir: root, matches, truncated, skipped } };
+    } catch (e) {
+      return fail(e);
+    }
+  },
+};
+
+export const fileTools = [
+  listFiles,
+  readFile,
+  folderSummary,
+  findDuplicates,
+  recentChanges,
+  findFiles,
+  makeFolder,
+  writeFile,
+  moveFile,
+  renameFile,
+  copyFile,
+  deleteFile,
+  extractZip,
+];

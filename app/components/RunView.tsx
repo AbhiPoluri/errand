@@ -2,7 +2,7 @@
 // language, the agent visibly pausing for permission (amber, fixed slot), and a calm
 // close. Predictable placement (VARIANCE 3), one breathing animation (MOTION 4), airy
 // (DENSITY 3). No emojis — small inline SVG primitives only.
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -103,6 +103,22 @@ function undoSentence(r: RunState["undoResult"]): string {
   return parts.join(" ");
 }
 
+// Assemble the whole conversation into clean Markdown for export (the per-reply Copy only grabs
+// one bubble). Pure function of RunState — no server work.
+function buildTranscriptMarkdown(state: RunState): string {
+  const lines: string[] = ["# Errand"];
+  for (const t of state.turns) {
+    lines.push("", "## You", t.user);
+    if (t.reply) lines.push("", "## Errand", t.reply);
+    if (t.problem) lines.push("", "## Snag", t.problem);
+  }
+  if (state.changes.length) {
+    lines.push("", "## What changed");
+    for (const c of state.changes) lines.push(`- ${c.summary}${c.undoable ? "" : " (can't be undone)"}`);
+  }
+  return lines.join("\n");
+}
+
 function dotClass(state: Step["state"]): string {
   switch (state) {
     case "done":
@@ -152,11 +168,13 @@ export function RunView(props: {
   onFollowUp: (m: string) => void;
   onUndo: () => void;
   onReset: () => void;
+  onRetryStart: () => void;
 }) {
   const { state } = props;
   const running = state.phase === "running";
   const waiting = state.phase === "waiting";
   const done = state.phase === "done";
+  const errored = state.phase === "error";
   const busy = running || waiting;
   const reversibleCount = state.changes.filter((c) => c.undoable).length;
   const needsBrowser = state.turns.some((t) =>
@@ -166,13 +184,22 @@ export function RunView(props: {
   const [connecting, setConnecting] = useState(false);
   const [attached, setAttached] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [uploadErr, setUploadErr] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const composerRef = useRef<HTMLInputElement>(null);
+
+  // When the agent settles (done/error), move focus to the composer so the user can reply or
+  // retry immediately — never mid-run, which would steal focus while they read progress.
+  useEffect(() => {
+    if (done || errored) composerRef.current?.focus();
+  }, [done, errored]);
 
   // Attach files mid-conversation: upload into THIS run's working folder (so read_file can
   // reach them) and prefill a read prompt; the user hits send.
   const uploadFiles = async (files: File[]) => {
     if (!state.runId || !files.length) return;
+    setUploadErr(null);
     setUploading(true);
     const added: string[] = [];
     try {
@@ -183,6 +210,7 @@ export function RunView(props: {
         const res = await fetch("/api/upload", { method: "POST", body: fd });
         const d = await res.json().catch(() => ({}));
         if (res.ok && d.name) added.push(d.name);
+        else setUploadErr(d.error || "I couldn't add that file.");
       }
       if (added.length) {
         setAttached((cur) => [...cur, ...added]);
@@ -195,7 +223,7 @@ export function RunView(props: {
         );
       }
     } catch {
-      /* ignore — the user can retry */
+      setUploadErr("I couldn't add that file.");
     } finally {
       setUploading(false);
     }
@@ -267,9 +295,16 @@ export function RunView(props: {
             )}
             {/* a snag in this turn */}
             {turn.problem && (
-              <div className="lift rounded-2xl border border-brick-200/70 bg-brick-50/70 p-5">
+              <div role="alert" className="lift rounded-2xl border border-brick-200/70 bg-brick-50/70 p-5">
                 <p className="text-sm font-semibold text-brick-700">A small snag</p>
                 <p className="mt-1.5 text-sm text-stone-700">{turn.problem}</p>
+                {/* Offer a one-tap retry of the same request so an error isn't a dead end. */}
+                <button
+                  onClick={() => props.onFollowUp(turn.user)}
+                  className="mt-3 rounded-lg border border-brick-300/70 bg-white px-3.5 py-2 text-[13px] font-medium text-brick-700 transition hover:border-brick-400 active:scale-[0.98]"
+                >
+                  Try again
+                </button>
               </div>
             )}
           </motion.div>
@@ -284,7 +319,7 @@ export function RunView(props: {
           animate={{ opacity: 1, y: 0 }}
           className="lift mt-5 rounded-3xl border border-stone-200/80 bg-white p-6"
         >
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3" role="status" aria-live="polite">
             <AgentOrb size={18} state={waiting ? "idle" : "working"} />
             <div className="min-w-0 flex-1">
               <AnimatePresence mode="wait">
@@ -353,12 +388,22 @@ export function RunView(props: {
         <div className="mt-4 rounded-xl border border-brick-200 bg-brick-50 p-6">
           <p className="text-sm font-semibold text-brick-700">A small snag</p>
           <p className="mt-2 text-stone-900">{state.problem}</p>
+          {/* A start failure (bad model, no key, Ollama down) shouldn't be a dead end — let them retry. */}
+          <button
+            onClick={props.onRetryStart}
+            className="mt-4 rounded-xl border border-brick-300/70 bg-white px-4 py-2.5 text-sm font-medium text-brick-700 transition hover:border-brick-400 active:scale-[0.98]"
+          >
+            Try again
+          </button>
         </div>
       )}
 
       {/* permission — rises in the same fixed slot, amber, batched per operation */}
       {state.approval && (
         <motion.div
+          role="alertdialog"
+          aria-live="assertive"
+          aria-labelledby="approval-heading"
           initial={{ opacity: 0, y: 10, scale: 0.99 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
           transition={{ type: "spring", stiffness: 200, damping: 22 }}
@@ -370,7 +415,7 @@ export function RunView(props: {
                 <path d="M8 4v5M8 11.5v.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
               </svg>
             </span>
-            <p className="text-sm font-semibold text-ochre-700">I need your okay first</p>
+            <p id="approval-heading" className="text-sm font-semibold text-ochre-700">I need your okay first</p>
           </div>
           <p className="mt-2.5 text-[15px] text-stone-900">{state.approval.action}</p>
           {state.approval.items.length > 0 && (
@@ -450,6 +495,19 @@ export function RunView(props: {
         </motion.div>
       )}
 
+      {/* read-only task: confirm explicitly that nothing was modified (the trust promise is only
+          visibly kept when SOMETHING changed; silence on a read-only task reads as uncertainty). */}
+      {done && state.changes.length === 0 && state.turns.some((t) => t.reply) && (
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mt-6 flex items-center gap-2.5 rounded-2xl border border-stone-200/80 bg-white px-5 py-4"
+        >
+          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-forest-600" />
+          <p className="text-sm text-stone-600">I didn't change any files — only read them.</p>
+        </motion.div>
+      )}
+
       {/* composer — ALWAYS available. Sending while the agent works interrupts and
           redirects it; a Stop button sits alongside to halt without a new instruction. */}
       <div className="sticky bottom-0 mt-8 bg-gradient-to-t from-[#F4EFE6] via-[#F4EFE6] to-transparent pb-3 pt-5">
@@ -480,7 +538,7 @@ export function RunView(props: {
             dragOver ? "border-accent-600/60 bg-accent-50/40" : "border-stone-200/80"
           }`}
         >
-          {(attached.length > 0 || uploading) && (
+          {(attached.length > 0 || uploading || uploadErr) && (
             <div className="flex flex-wrap items-center gap-1.5 px-2 pb-1 pt-1">
               {attached.map((name) => (
                 <span
@@ -504,6 +562,7 @@ export function RunView(props: {
                 </span>
               ))}
               {uploading && <span className="text-xs text-stone-400">Adding…</span>}
+              {uploadErr && <span className="text-xs text-brick-600">{uploadErr}</span>}
             </div>
           )}
           <div className="flex items-center gap-2">
@@ -512,6 +571,7 @@ export function RunView(props: {
                 type="button"
                 onClick={props.onCancel}
                 title="Stop"
+                aria-label="Stop"
                 className="grid h-10 w-10 shrink-0 place-items-center rounded-xl text-stone-500 transition hover:bg-brick-50 hover:text-brick-600 active:scale-[0.96]"
               >
                 <span className="block h-3 w-3 rounded-[3px] bg-current" />
@@ -538,10 +598,12 @@ export function RunView(props: {
               </svg>
             </button>
             <input
+              ref={composerRef}
               value={followUp}
+              aria-label={busy ? "Interrupt the agent" : "Ask for one more thing"}
               onChange={(e) => setFollowUp(e.target.value)}
               placeholder={busy ? "Interrupt — tell me to change course…" : "Ask for one more thing…"}
-              className="flex-1 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-stone-400"
+              className="flex-1 bg-transparent px-3 py-2 text-sm outline-none focus-visible:ring-0 placeholder:text-stone-400"
             />
             <button
               type="submit"
@@ -554,10 +616,28 @@ export function RunView(props: {
             </button>
           </div>
         </form>
-        {done && (
-          <button onClick={props.onReset} className="mt-3 px-1 text-sm text-stone-500 transition hover:text-stone-900">
-            Start something else
-          </button>
+        {(done || errored) && (
+          <div className="mt-3 flex items-center gap-4 px-1">
+            <button onClick={props.onReset} className="text-sm text-stone-500 transition hover:text-stone-900">
+              Start something else
+            </button>
+            {state.turns.some((t) => t.reply) && (
+              <button
+                onClick={() => {
+                  const md = buildTranscriptMarkdown(state);
+                  const url = URL.createObjectURL(new Blob([md], { type: "text/markdown" }));
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = "errand-transcript.md";
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}
+                className="text-sm text-stone-500 transition hover:text-stone-900"
+              >
+                Export transcript
+              </button>
+            )}
+          </div>
         )}
       </div>
     </div>

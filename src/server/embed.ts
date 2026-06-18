@@ -4,10 +4,27 @@
 // Verified 2026-06-17: OpenRouter serves /embeddings for this model even though it isn't
 // listed in /api/v1/models. Every call fails SOFT (returns null) so retrieval can fall back
 // to recency — embeddings are an optimization here, never a hard dependency.
-import { client } from "../client.ts";
+import { client as defaultClient } from "../client.ts";
 
 const EMBED_MODEL = "openai/text-embedding-3-small";
 export const EMBED_DIM = 1536;
+
+// Minimal structural shape of the embeddings client. The real OpenAI client is assignable to it,
+// and a test stub typed against it can't return a wrong-shaped response and still compile (which
+// would defeat the offline embed:test).
+export interface EmbedClient {
+  embeddings: {
+    create(args: { model: string; input: string | string[] }): Promise<{ data: { embedding: number[]; index?: number }[] }>;
+  };
+}
+
+// The active embeddings client. Defaults to the OpenRouter singleton; tests swap in a stub via
+// _setEmbedClient so embed()/embedMany() can be exercised fully offline (the fail-soft contract
+// and the index-remap aren't otherwise verifiable without network).
+let activeClient: EmbedClient = defaultClient;
+export function _setEmbedClient(c: EmbedClient | null): void {
+  activeClient = c ?? defaultClient;
+}
 
 // Embed one string. Returns the vector, or null on any failure (blank input, network error,
 // malformed response) so the caller can fall back to recency.
@@ -15,7 +32,7 @@ export async function embed(text: string): Promise<number[] | null> {
   const input = text.trim();
   if (!input) return null;
   try {
-    const res = await client.embeddings.create({ model: EMBED_MODEL, input });
+    const res = await activeClient.embeddings.create({ model: EMBED_MODEL, input });
     const vec = res.data?.[0]?.embedding;
     return Array.isArray(vec) && vec.length ? (vec as number[]) : null;
   } catch {
@@ -37,7 +54,7 @@ export async function embedMany(texts: string[]): Promise<(number[] | null)[]> {
   });
   if (!live.length) return out;
   try {
-    const res = await client.embeddings.create({ model: EMBED_MODEL, input: live.map((l) => l.text) });
+    const res = await activeClient.embeddings.create({ model: EMBED_MODEL, input: live.map((l) => l.text) });
     res.data.forEach((d, i) => {
       const slot = live[d.index ?? i]; // map the API row back to its original position
       if (slot && Array.isArray(d.embedding) && d.embedding.length) {

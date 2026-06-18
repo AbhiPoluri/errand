@@ -17,6 +17,7 @@ export async function GET(req: NextRequest, { params }: { params: { runId: strin
   const enc = new TextEncoder();
 
   let unsubscribe = () => {};
+  let offDone = () => {};
   let heartbeat: ReturnType<typeof setInterval> | undefined;
 
   const stream = new ReadableStream<Uint8Array>({
@@ -30,9 +31,21 @@ export async function GET(req: NextRequest, { params }: { params: { runId: strin
       };
       const cleanup = () => {
         unsubscribe();
+        offDone();
         if (heartbeat) clearInterval(heartbeat);
       };
       unsubscribe = entry.sink.subscribe(send, Number.isFinite(fromSeq) ? fromSeq : 0);
+      // When the run terminates, the terminal event has just been sent — tear down + close so this
+      // connection stops pinning the run's event buffer and heartbeat (it would otherwise linger
+      // until a real socket close: sleep, backgrounded tab, a proxy holding the socket).
+      offDone = entry.sink.onDone(() => {
+        cleanup();
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
+      });
       heartbeat = setInterval(() => {
         try {
           controller.enqueue(enc.encode(`: ping\n\n`));
@@ -44,6 +57,7 @@ export async function GET(req: NextRequest, { params }: { params: { runId: strin
     },
     cancel() {
       unsubscribe();
+      offDone();
       if (heartbeat) clearInterval(heartbeat);
     },
   });

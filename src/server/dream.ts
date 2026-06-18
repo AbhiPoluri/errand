@@ -2,9 +2,25 @@
 // conversations + existing memories and (1) extracts durable facts/preferences/habits,
 // (2) DE-DUPLICATES — merging near-identical memories into one and removing the redundant
 // ones, (3) surfaces a couple of gentle proactive ideas. One model call; results saved.
+import { z } from "zod";
 import { client } from "../client.ts";
 import { config } from "../config.ts";
 import * as store from "./store.ts";
+
+// The dream model output is the riskiest untyped input in the app — it drives DESTRUCTIVE
+// de-dup (delete/rewrite of stored memories). Validate PER ELEMENT so one malformed item doesn't
+// discard the whole pass (small models often emit one bad entry alongside good ones): the
+// destructive path is still validated (group ids coerced to strings, items must have text), but
+// valid memories/dedups still apply. `text` on a group is optional (delete-only groups allowed);
+// `kind`/`prompt` are nullish so a model emitting null instead of "" still passes.
+const DreamMemory = z.object({ text: z.string(), kind: z.string().nullish() });
+const DreamGroup = z.object({
+  ids: z.array(z.any()).transform((a) => a.filter((x): x is string => typeof x === "string")),
+  text: z.string().nullish(),
+});
+const DreamSuggestion = z.object({ text: z.string(), prompt: z.string().nullish() });
+const validItems = <T>(arr: unknown, schema: z.ZodType<T>): T[] =>
+  (Array.isArray(arr) ? arr : []).map((x) => schema.safeParse(x)).flatMap((r) => (r.success ? [r.data] : []));
 
 const SCHEMA_HINT = `Return ONLY a JSON object of this shape:
 {
@@ -51,6 +67,9 @@ export async function dream(): Promise<{ added: number; merged: number; removed:
   } catch {
     return { added: 0, merged: 0, removed: 0, suggested: 0 };
   }
+  const newMemories = validItems(out?.newMemories, DreamMemory);
+  const groups = validItems(out?.duplicateGroups, DreamGroup);
+  const suggestionList = validItems(out?.suggestions, DreamSuggestion);
 
   const ids = new Set(memList.map((m) => m.id));
 
@@ -58,11 +77,11 @@ export async function dream(): Promise<{ added: number; merged: number; removed:
   // and deleting the rest. We always keep one per group, so this can't wipe a fact.
   let merged = 0;
   let removed = 0;
-  for (const g of Array.isArray(out.duplicateGroups) ? out.duplicateGroups : []) {
-    const gids = (Array.isArray(g?.ids) ? g.ids : []).filter((id: any) => typeof id === "string" && ids.has(id));
+  for (const g of groups) {
+    const gids = g.ids.filter((id) => ids.has(id)); // only operate on ids in the current set
     if (gids.length === 0) continue;
     const keep = gids[0];
-    if (typeof g.text === "string" && g.text.trim()) {
+    if (g.text && g.text.trim()) {
       await store.updateMemory(keep, g.text);
       merged++;
     }
@@ -74,21 +93,27 @@ export async function dream(): Promise<{ added: number; merged: number; removed:
   }
 
   // New durable facts (addMemory still skips exact duplicates).
+  // Track known ids once (memList is already in scope) instead of re-scanning the whole memory
+  // store twice per new fact: addMemory returns '' on blank, the existing id on an exact dup, or a
+  // fresh id otherwise — so a non-empty, not-yet-seen id means a genuinely new row.
   let added = 0;
-  for (const m of Array.isArray(out.newMemories) ? out.newMemories : []) {
-    if (m && typeof m.text === "string") {
-      const before = store.listMemories().length;
-      await store.addMemory(m.text, typeof m.kind === "string" ? m.kind : "fact", "dream");
-      if (store.listMemories().length > before) added++;
+  // Seed from a FRESH read taken AFTER the model await, not the pre-await memList snapshot: a fact
+  // a concurrent run live-saved during the (multi-second) await would otherwise be returned by
+  // addMemory as an EXISTING id absent from the snapshot and miscounted as added. One read, not the
+  // per-fact N+1 this replaced.
+  const known = new Set(store.listMemories().map((m) => m.id));
+  for (const m of newMemories) {
+    const id = await store.addMemory(m.text, m.kind ?? "fact", "dream");
+    if (id && !known.has(id)) {
+      added++;
+      known.add(id);
     }
   }
 
   let suggested = 0;
-  for (const s of (Array.isArray(out.suggestions) ? out.suggestions : []).slice(0, 3)) {
-    if (s && typeof s.text === "string") {
-      store.addSuggestion(s.text, typeof s.prompt === "string" && s.prompt.trim() ? s.prompt : null);
-      suggested++;
-    }
+  for (const s of suggestionList.slice(0, 3)) {
+    store.addSuggestion(s.text, s.prompt && s.prompt.trim() ? s.prompt : null);
+    suggested++;
   }
 
   store.setSetting("lastDream", String(Date.now()));

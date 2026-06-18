@@ -38,6 +38,30 @@ export const ENDPOINTS: Endpoint[] = [
   },
 ];
 
+// Detect the Ollama models installed on THIS machine via Ollama's `GET /api/tags`. Fail-soft and
+// fast: if Ollama isn't running (or is slow), returns [] within a short timeout rather than hanging
+// the caller. The tags endpoint lives at the host root (/api/tags), not under the OpenAI-compat /v1.
+export async function listOllamaModels(timeoutMs = 1000): Promise<string[]> {
+  const ep = ENDPOINTS.find((e) => e.key === "ollama");
+  if (!ep) return [];
+  const tagsUrl = ep.baseURL.replace(/\/v1\/?$/, "") + "/api/tags";
+  try {
+    const res = await fetch(tagsUrl, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) return [];
+    const data: any = await res.json();
+    const names = Array.isArray(data?.models)
+      ? data.models
+          .map((m: any) => m?.name)
+          // Drop embedding models — they can't run the agent's chat/tool-calling loop, so offering
+          // one as the model would just produce failed runs.
+          .filter((n: any) => typeof n === "string" && n && !/embed/i.test(n))
+      : [];
+    return [...new Set<string>(names)];
+  } catch {
+    return []; // Ollama not running / unreachable — the header falls back to the documented default
+  }
+}
+
 export const MODEL_PRESETS: ModelPreset[] = [
   { id: "deepseek/deepseek-v4-flash:nitro", label: "DeepSeek V4 Flash", note: "Fast and low-cost — the default" },
   { id: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash", note: "Fast, capable" },

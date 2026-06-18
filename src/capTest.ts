@@ -2,7 +2,7 @@
 // available packs (base tools always on, unknown ids ignored), and requiresEnv gates a pack
 // in/out through the assembler. Pure logic — no network. Run: `npm run cap:test`.
 import { z } from "zod";
-import { buildRegistryFor, CAPABILITIES, DEFAULT_PACKS, isAvailable, availablePackIds } from "./capabilities/index.ts";
+import { buildRegistryFor, CAPABILITIES, DEFAULT_PACKS, isAvailable, availablePackIds, enabledPacks } from "./capabilities/index.ts";
 import type { Capability } from "./capabilities/types.ts";
 import type { Registry, Tool } from "./tools/index.ts";
 
@@ -67,6 +67,19 @@ function main(): void {
   check("every pack has ≥1 tool + a label", CAPABILITIES.every((c) => c.tools.length > 0 && !!c.label));
   check("DEFAULT_PACKS all exist as packs", DEFAULT_PACKS.every((id) => ids.includes(id)));
   check("no-auth packs all available", availablePackIds().sort().join() === [...DEFAULT_PACKS].sort().join());
+
+  // enabledPacks: user's saved set, 'files' always forced on, unset → defaults, unknown dropped.
+  check("enabledPacks('') → DEFAULT_PACKS", enabledPacks("").sort().join() === [...DEFAULT_PACKS].sort().join());
+  check("enabledPacks('files') → only files (others off)", enabledPacks("files").join() === "files");
+  check("enabledPacks('web') forces files on", new Set(enabledPacks("web")).has("files") && new Set(enabledPacks("web")).has("web"));
+  check("enabledPacks drops unknown ids", !enabledPacks("files,bogus").includes("bogus"));
+  check(
+    "buildRegistryFor(enabledPacks('files')) → files+base only, no web",
+    (() => {
+      const n = names(buildRegistryFor(enabledPacks("files")));
+      return n.has("read_file") && n.has("get_date") && !n.has("web_search");
+    })(),
+  );
 
   console.log(`\nRESULT: ${failures === 0 ? "ALL PASS" : failures + " FAILED"}`);
   if (failures) process.exitCode = 1;

@@ -3,9 +3,10 @@
 // parked loop. Stored on globalThis so Next.js dev HMR doesn't drop live runs.
 import { config } from "../config.ts";
 import { Session } from "../session.ts";
+import { Journal } from "../journal.ts";
 import { Logger } from "../log.ts";
 import { Registry } from "../tools/index.ts";
-import { buildRegistryFor, DEFAULT_PACKS } from "../capabilities/index.ts";
+import { buildRegistryFor, enabledPacks } from "../capabilities/index.ts";
 import { makeClient } from "../client.ts";
 import { ENDPOINTS } from "../models.ts";
 import { AgentRunner } from "../loop.ts";
@@ -14,6 +15,7 @@ import { SYSTEM_PROMPT } from "../prompt.ts";
 import { WebSink } from "./webSink.ts";
 import * as store from "./store.ts";
 import { dream } from "./dream.ts";
+import { rebuildJournalFromStore } from "./journalRestore.ts";
 
 // Reflect after a task settles — only if dreaming is on, debounced so it doesn't run
 // after every turn. Fire-and-forget; failures are silent.
@@ -82,14 +84,22 @@ const runs: Map<string, RunEntry> = (g.__errandRuns ??= new Map());
 // so an HMR edge can never mark a genuinely-live run as interrupted.
 if (!g.__errandReconciled) {
   g.__errandReconciled = true;
-  const n = store.reconcileOrphans(new Set(runs.keys()));
-  if (n) console.log(`[errand] reconciled ${n} interrupted run(s) from a previous session`);
+  // This runs at module-init time, before any route can serve — so a throw here would brick
+  // EVERY /api/runs/* route at boot. Guard it: a reconcile failure must degrade to "didn't
+  // tidy up the zombies", never "the server won't start".
+  try {
+    const n = store.reconcileOrphans(new Set(runs.keys()));
+    if (n) console.log(`[errand] reconciled ${n} interrupted run(s) from a previous session`);
+  } catch (e) {
+    console.warn("[errand] orphan reconciliation failed (continuing):", e);
+  }
 }
 
 function buildRegistry(): Registry {
-  // Consumer default: the no-auth capability packs (files/web/browser/memory). General `bash`
-  // is the "power path" (decision #4) and is intentionally NOT in any web pack yet.
-  return buildRegistryFor(DEFAULT_PACKS);
+  // The packs the user has enabled in Settings (defaults to the no-auth consumer surface
+  // files/web/browser/memory; 'files' always forced on). General `bash` is the "power path"
+  // (decision #4) and is intentionally NOT in any web pack yet.
+  return buildRegistryFor(enabledPacks(store.getSetting("packs")));
 }
 
 // The model new runs use: the user's saved choice (Settings → model switcher) or the env
@@ -114,9 +124,14 @@ function currentClient() {
 // `query` is the run's first message — used to retrieve only the memories relevant to THIS
 // task (embedding-ranked), instead of dumping every memory into the prompt.
 async function buildSystemPrompt(query: string): Promise<string> {
+  // State today's date every run: a get_date tool exists, but the model only calls it if it
+  // reasons to — for common asks ("files from last week", "what's due this month", "as of today")
+  // a cheap/local model anchors on its training cutoff and answers wrongly without ever calling it.
+  const dateLine = `Today is ${new Date().toDateString()}. Use this for anything time-related; only check the exact clock time with a tool when you truly need it.`;
+  const base = `${dateLine}\n\n${SYSTEM_PROMPT}`;
   const mems = await store.relevantMemories(query);
-  if (!mems) return SYSTEM_PROMPT;
-  return `${SYSTEM_PROMPT}\n\nWhat you remember about this person (use it naturally; never recite it back):\n${mems}`;
+  if (!mems) return base;
+  return `${base}\n\nWhat you remember about this person (use it naturally; never recite it back):\n${mems}`;
 }
 
 // Persist events to the DB; update status/changeCount on terminal events. Per-token streaming
@@ -125,14 +140,42 @@ async function buildSystemPrompt(query: string): Promise<string> {
 function attachPersistence(entry: RunEntry): void {
   entry.sink.subscribe((e) => {
     if (entry.deleted) return; // deleted mid-run — don't re-add its in-flight events to the DB
-    if (e.type !== "message.delta" && e.type !== "thinking.delta") store.appendEvent(entry.runId, e);
-    if (e.type === "run.finished") {
-      store.setStatus(entry.runId, "done");
-      store.setChangeCount(entry.runId, e.changes.length);
-    } else if (e.type === "run.error") {
-      store.setStatus(entry.runId, "stopped");
+    // A transient DB hiccup (locked by a second process, disk full) must degrade to "we didn't
+    // save that event", not crash the run. WebSink.emit swallows subscriber throws, but persist
+    // explicitly so a write failure can never interrupt the live stream or mark a run wrong.
+    try {
+      if (e.type !== "message.delta") store.appendEvent(entry.runId, e);
+      // Persist the journal manifest the moment a mutating op completes, NOT only at turn-settle.
+      // The destructive change + its snapshot already hit disk during tool.run; if the worker is
+      // killed mid-turn, the end-of-turn persistJournal never runs and Undo-after-restart would
+      // find no manifest. Persisting on each tool.result closes that crash window (idempotent via
+      // INSERT OR IGNORE). The runTurn.finally call stays as a harmless backstop.
+      if (e.type === "tool.result") persistJournal(entry);
+      if (e.type === "run.finished") {
+        store.setStatus(entry.runId, "done");
+        store.setChangeCount(entry.runId, e.changes.length);
+      } else if (e.type === "run.error") {
+        store.setStatus(entry.runId, "stopped");
+      }
+    } catch (err) {
+      console.warn(`[errand] failed to persist ${e.type} for run ${entry.runId} (continuing):`, err);
     }
   });
+}
+
+// Persist this run's journal manifest (idempotent via INSERT OR IGNORE). The live in-memory
+// inverses still drive Undo while the run is in memory; this lets rebuildJournalFromStore
+// reconstruct them after a restart or eviction.
+function persistJournal(entry: RunEntry): void {
+  for (const e of entry.session.journal.list()) {
+    store.appendJournalOp(entry.runId, {
+      opId: e.id,
+      op: e.op,
+      description: e.description,
+      reversibility: e.reversibility,
+      manifest: e.manifest,
+    });
+  }
 }
 
 function runTurn(entry: RunEntry, message: string): void {
@@ -143,8 +186,16 @@ function runTurn(entry: RunEntry, message: string): void {
     .catch(() => {})
     .finally(() => {
       entry.busy = false;
-      store.setMessages(entry.runId, entry.session.messages); // durable conversation
-      maybeDream(); // reflect after the task settles (if dreaming is on)
+      // Guard the post-turn writes: a throw in this .finally would become an unhandled
+      // rejection that can take down the Next worker mid-errand. Saving the conversation or
+      // kicking off dreaming failing should be silent, not fatal.
+      try {
+        store.setMessages(entry.runId, entry.session.messages); // durable conversation
+        if (!entry.deleted) persistJournal(entry); // so Undo survives a restart / eviction
+        maybeDream(); // reflect after the task settles (if dreaming is on)
+      } catch (err) {
+        console.warn(`[errand] post-turn persistence failed for run ${entry.runId} (continuing):`, err);
+      }
     });
 }
 
@@ -192,6 +243,9 @@ function rehydrate(runId: string): RunEntry | undefined {
   const events = store.getEvents(runId);
   const session = new Session(SYSTEM_PROMPT);
   if (stored.messages.length) session.loadMessages(stored.messages as any);
+  // Restore the journal from its persisted manifest so Undo still works on this run (its live
+  // inverse closures died with the previous process). No-op for runs that changed nothing.
+  rebuildJournalFromStore(runId, session.journal);
   const sink = new WebSink();
   sink.preload(events);
   const maxSeq = events.length ? events[events.length - 1].seq : -1;
@@ -300,10 +354,17 @@ export async function sendMessage(runId: string, message: string): Promise<"ok" 
 }
 
 // Undo every reversible op this run journaled (delete→restore, write→prior bytes, …).
+// If the run is live, use its in-memory journal. Otherwise rebuild a THROWAWAY journal from the
+// persisted manifest and undo from that — never go through getRun/rehydrate, which would
+// construct a full AgentRunner + a permanent sink subscription and leave the evicted run resident
+// in the registry for the rest of the process (resource growth on every undo of an old run).
 export async function undoRun(
   runId: string,
 ): Promise<{ undone: number; failed: number; skipped: number } | null> {
-  const entry = runs.get(runId);
-  if (!entry) return null;
-  return entry.session.journal.undoAll();
+  const live = runs.get(runId);
+  if (live) return live.session.journal.undoAll();
+  if (!store.getStoredRun(runId)) return null;
+  const journal = new Journal();
+  rebuildJournalFromStore(runId, journal);
+  return journal.undoAll();
 }

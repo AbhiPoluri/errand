@@ -289,6 +289,56 @@ function colIndex(letters: string): number {
   return n - 1;
 }
 
+// ---- ZIP enumeration (generalizes readZipEntry's central-directory walk for extract_zip) ----
+export interface ZipEntry {
+  name: string;
+  method: number;
+  compSize: number;
+  localOff: number;
+}
+
+// Enumerate ALL entries from the ZIP central directory. [] if the archive is unreadable.
+export function listZipEntries(zip: Buffer): ZipEntry[] {
+  if (zip.length < 22) return [];
+  let eocd = -1;
+  for (let i = zip.length - 22; i >= 0; i--) {
+    if (zip.readUInt32LE(i) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) return [];
+  const cdCount = zip.readUInt16LE(eocd + 10);
+  let p = zip.readUInt32LE(eocd + 16);
+  const out: ZipEntry[] = [];
+  for (let n = 0; n < cdCount; n++) {
+    if (p + 46 > zip.length || zip.readUInt32LE(p) !== 0x02014b50) break;
+    const method = zip.readUInt16LE(p + 10);
+    const compSize = zip.readUInt32LE(p + 20);
+    const nameLen = zip.readUInt16LE(p + 28);
+    const extraLen = zip.readUInt16LE(p + 30);
+    const commentLen = zip.readUInt16LE(p + 32);
+    const localOff = zip.readUInt32LE(p + 42);
+    out.push({ name: zip.toString("utf8", p + 46, p + 46 + nameLen), method, compSize, localOff });
+    p += 46 + nameLen + extraLen + commentLen;
+  }
+  return out;
+}
+
+// Decompress one enumerated entry's bytes (stored or deflate), or null. Bombs are capped.
+export function inflateZipEntry(zip: Buffer, e: ZipEntry): Buffer | null {
+  if (e.localOff + 30 > zip.length || zip.readUInt32LE(e.localOff) !== 0x04034b50) return null;
+  const lNameLen = zip.readUInt16LE(e.localOff + 26);
+  const lExtraLen = zip.readUInt16LE(e.localOff + 28);
+  const dataStart = e.localOff + 30 + lNameLen + lExtraLen;
+  const data = zip.subarray(dataStart, dataStart + e.compSize);
+  try {
+    return e.method === 0 ? Buffer.from(data) : inflateRawSync(data, { maxOutputLength: MAX_DOCX_XML_BYTES });
+  } catch {
+    return null;
+  }
+}
+
 // Pull one entry's decompressed bytes out of a ZIP by exact filename, or null if absent.
 // Reads the compressed size from the CENTRAL directory (authoritative even when a data
 // descriptor zeroes it in the local header), and the data offset from the local header

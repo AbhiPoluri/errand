@@ -22,8 +22,17 @@ export async function POST(req: NextRequest) {
     const pre = checkRoots(roots);
     if (!pre.ok) return NextResponse.json({ error: pre.problem }, { status: 400 });
   }
-  const runId = await startRun(message, roots);
-  return NextResponse.json({ runId });
+  // Starting an errand is the first thing every user does, and startRun does real work
+  // (memory retrieval -> embeddings, DB writes). Any throw here would otherwise return Next's
+  // default unstyled 500 HTML, which the JSON-expecting client renders as nothing. Return calm
+  // JSON instead — useRun.start already reads `error` off a non-ok response.
+  try {
+    const runId = await startRun(message, roots);
+    return NextResponse.json({ runId });
+  } catch (e) {
+    console.error("[api/runs] startRun failed:", e);
+    return NextResponse.json({ error: "I couldn't start that just now. Want to try again?" }, { status: 500 });
+  }
 }
 
 // DELETE /api/runs — remove one or more conversations. Body: { ids: string[] }.
