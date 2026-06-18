@@ -58,7 +58,7 @@ export default function Page() {
   const [showInstall, setShowInstall] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [suggestions, setSuggestions] = useState<{ id: string; text: string; prompt: string | null }[]>([]);
-  const [attached, setAttached] = useState<{ name: string } | null>(null);
+  const [attached, setAttached] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadErr, setUploadErr] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -91,24 +91,34 @@ export default function Page() {
     setDeleting(false);
   };
 
-  // Attach a file for Errand to read: upload into its safe folder, scope there, and prefill a
-  // ready prompt so the file just gets read on submit.
-  const uploadFile = async (file: File) => {
+  // Attach one or more files for Errand to read: upload into its safe folder, scope there, and
+  // prefill a ready prompt so they just get read on submit.
+  const uploadFiles = async (files: File[]) => {
+    if (!files.length) return;
     setUploadErr(null);
     setUploading(true);
+    const added: string[] = [];
     try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const res = await fetch("/api/upload", { method: "POST", body: fd });
-      const d = await res.json().catch(() => ({}));
-      if (!res.ok || !d.name) {
-        setUploadErr(d.error || "I couldn't add that file.");
-        return;
+      for (const file of files) {
+        const fd = new FormData();
+        fd.append("file", file);
+        const res = await fetch("/api/upload", { method: "POST", body: fd });
+        const d = await res.json().catch(() => ({}));
+        if (res.ok && d.name) added.push(d.name);
+        else setUploadErr(d.error || "I couldn't add that file.");
       }
-      setAttached({ name: d.name });
-      const safe = folders.find((f) => f.key === "workspace");
-      if (safe) setScope(safe); // the file lives in the safe folder, so read_file can reach it
-      setInput((cur) => (cur.trim() ? cur : `Read ${d.name} and tell me what's in it.`));
+      if (added.length) {
+        setAttached((cur) => [...cur, ...added]);
+        const safe = folders.find((f) => f.key === "workspace");
+        if (safe) setScope(safe); // the files live in the safe folder, so read_file can reach them
+        setInput((cur) =>
+          cur.trim()
+            ? cur
+            : added.length === 1
+              ? `Read ${added[0]} and tell me what's in it.`
+              : `Read these files and tell me what's in them: ${added.join(", ")}.`,
+        );
+      }
     } catch {
       setUploadErr("I couldn't add that file.");
     } finally {
@@ -223,7 +233,7 @@ export default function Page() {
     const v = text.trim();
     if (!v) return;
     run.start(v, scope ? [scope.path] : undefined);
-    setAttached(null); // chip belongs to this task only
+    setAttached([]); // chips belong to this task only
     setUploadErr(null);
   };
 
@@ -275,8 +285,7 @@ export default function Page() {
           onDrop={(e) => {
             e.preventDefault();
             setDragOver(false);
-            const f = e.dataTransfer.files?.[0];
-            if (f) uploadFile(f);
+            uploadFiles(Array.from(e.dataTransfer.files ?? []));
           }}
           className={`lift-lg group rounded-[1.75rem] border bg-white p-2.5 transition focus-within:border-accent-600/40 ${
             dragOver ? "border-accent-600/60 bg-accent-50/40" : "border-stone-200/80"
@@ -295,33 +304,32 @@ export default function Page() {
             placeholder="Tell me what you'd like done — organize a folder, read a file you drop in, draft an email…"
             className="block w-full resize-none bg-transparent px-3.5 pt-2.5 text-[15px] leading-relaxed text-stone-900 outline-none placeholder:text-stone-400"
           />
-          {/* attachment status: uploading / error / the attached-file chip */}
-          {(attached || uploading || uploadErr) && (
-            <div className="px-2 pb-1 pt-0.5">
-              {uploading ? (
-                <span className="text-xs text-stone-400">Adding your file…</span>
-              ) : uploadErr ? (
-                <span className="text-xs text-brick-600">{uploadErr}</span>
-              ) : (
-                attached && (
-                  <span className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-accent-600/30 bg-accent-50 px-2.5 py-1 text-xs font-medium text-accent-700">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden className="shrink-0">
-                      <path d="M21.44 11.05l-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          {/* attachment status: uploading / error / the attached-file chips */}
+          {(attached.length > 0 || uploading || uploadErr) && (
+            <div className="flex flex-wrap items-center gap-1.5 px-2 pb-1 pt-0.5">
+              {attached.map((name) => (
+                <span
+                  key={name}
+                  className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-accent-600/30 bg-accent-50 px-2.5 py-1 text-xs font-medium text-accent-700"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden className="shrink-0">
+                    <path d="M21.44 11.05l-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <span className="truncate">{name}</span>
+                  <button
+                    type="button"
+                    onClick={() => setAttached((cur) => cur.filter((n) => n !== name))}
+                    aria-label={`Remove ${name}`}
+                    className="ml-0.5 shrink-0 text-accent-700/60 transition hover:text-accent-700"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden>
+                      <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
                     </svg>
-                    <span className="truncate">{attached.name}</span>
-                    <button
-                      type="button"
-                      onClick={() => setAttached(null)}
-                      aria-label="Remove file"
-                      className="ml-0.5 shrink-0 text-accent-700/60 transition hover:text-accent-700"
-                    >
-                      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden>
-                        <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                      </svg>
-                    </button>
-                  </span>
-                )
-              )}
+                  </button>
+                </span>
+              ))}
+              {uploading && <span className="text-xs text-stone-400">Adding…</span>}
+              {uploadErr && <span className="text-xs text-brick-600">{uploadErr}</span>}
             </div>
           )}
           <div className="flex items-center justify-between px-2 pb-1 pt-1">
@@ -329,10 +337,10 @@ export default function Page() {
               <input
                 ref={fileRef}
                 type="file"
+                multiple
                 className="hidden"
                 onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) uploadFile(f);
+                  uploadFiles(Array.from(e.target.files ?? []));
                   e.target.value = "";
                 }}
               />
@@ -415,7 +423,7 @@ export default function Page() {
                       setScope(f);
                       // An attached file lives in the safe folder; switching away makes it
                       // unreadable, so drop the now-misleading chip.
-                      if (f.key !== "workspace") setAttached(null);
+                      if (f.key !== "workspace") setAttached([]);
                     }}
                     title={f.path}
                     className={`rounded-xl border px-3.5 py-2 text-[13px] font-medium transition active:scale-[0.98] ${

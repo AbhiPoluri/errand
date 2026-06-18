@@ -164,25 +164,35 @@ export function RunView(props: {
   );
   const [followUp, setFollowUp] = useState("");
   const [connecting, setConnecting] = useState(false);
-  const [attached, setAttached] = useState<{ name: string } | null>(null);
+  const [attached, setAttached] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  // Attach a file mid-conversation: upload into THIS run's working folder (so read_file can
-  // reach it) and prefill a read prompt; the user hits send.
-  const uploadFile = async (file: File) => {
-    if (!state.runId) return;
+  // Attach files mid-conversation: upload into THIS run's working folder (so read_file can
+  // reach them) and prefill a read prompt; the user hits send.
+  const uploadFiles = async (files: File[]) => {
+    if (!state.runId || !files.length) return;
     setUploading(true);
+    const added: string[] = [];
     try {
-      const fd = new FormData();
-      fd.append("file", file);
-      fd.append("runId", state.runId);
-      const res = await fetch("/api/upload", { method: "POST", body: fd });
-      const d = await res.json().catch(() => ({}));
-      if (res.ok && d.name) {
-        setAttached({ name: d.name });
-        setFollowUp((cur) => (cur.trim() ? cur : `Read ${d.name} and tell me what's in it.`));
+      for (const file of files) {
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("runId", state.runId);
+        const res = await fetch("/api/upload", { method: "POST", body: fd });
+        const d = await res.json().catch(() => ({}));
+        if (res.ok && d.name) added.push(d.name);
+      }
+      if (added.length) {
+        setAttached((cur) => [...cur, ...added]);
+        setFollowUp((cur) =>
+          cur.trim()
+            ? cur
+            : added.length === 1
+              ? `Read ${added[0]} and tell me what's in it.`
+              : `Read these files and tell me what's in them: ${added.join(", ")}.`,
+        );
       }
     } catch {
       /* ignore — the user can retry */
@@ -450,7 +460,7 @@ export function RunView(props: {
             if (v) {
               props.onFollowUp(v);
               setFollowUp("");
-              setAttached(null);
+              setAttached([]);
             }
           }}
           onDragOver={(e) => {
@@ -464,37 +474,36 @@ export function RunView(props: {
           onDrop={(e) => {
             e.preventDefault();
             setDragOver(false);
-            const f = e.dataTransfer.files?.[0];
-            if (f) uploadFile(f);
+            uploadFiles(Array.from(e.dataTransfer.files ?? []));
           }}
           className={`lift rounded-2xl border bg-white p-1.5 transition ${
             dragOver ? "border-accent-600/60 bg-accent-50/40" : "border-stone-200/80"
           }`}
         >
-          {(attached || uploading) && (
-            <div className="px-2 pb-1 pt-1">
-              {uploading ? (
-                <span className="text-xs text-stone-400">Adding your file…</span>
-              ) : (
-                attached && (
-                  <span className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-accent-600/30 bg-accent-50 px-2.5 py-1 text-xs font-medium text-accent-700">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden className="shrink-0">
-                      <path d="M21.44 11.05l-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          {(attached.length > 0 || uploading) && (
+            <div className="flex flex-wrap items-center gap-1.5 px-2 pb-1 pt-1">
+              {attached.map((name) => (
+                <span
+                  key={name}
+                  className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-accent-600/30 bg-accent-50 px-2.5 py-1 text-xs font-medium text-accent-700"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden className="shrink-0">
+                    <path d="M21.44 11.05l-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <span className="truncate">{name}</span>
+                  <button
+                    type="button"
+                    onClick={() => setAttached((cur) => cur.filter((n) => n !== name))}
+                    aria-label={`Remove ${name}`}
+                    className="ml-0.5 shrink-0 text-accent-700/60 transition hover:text-accent-700"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden>
+                      <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
                     </svg>
-                    <span className="truncate">{attached.name}</span>
-                    <button
-                      type="button"
-                      onClick={() => setAttached(null)}
-                      aria-label="Remove file"
-                      className="ml-0.5 shrink-0 text-accent-700/60 transition hover:text-accent-700"
-                    >
-                      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden>
-                        <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                      </svg>
-                    </button>
-                  </span>
-                )
-              )}
+                  </button>
+                </span>
+              ))}
+              {uploading && <span className="text-xs text-stone-400">Adding…</span>}
             </div>
           )}
           <div className="flex items-center gap-2">
@@ -511,10 +520,10 @@ export function RunView(props: {
             <input
               ref={fileRef}
               type="file"
+              multiple
               className="hidden"
               onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) uploadFile(f);
+                uploadFiles(Array.from(e.target.files ?? []));
                 e.target.value = "";
               }}
             />
