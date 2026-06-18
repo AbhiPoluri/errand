@@ -22,6 +22,9 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
   const [savingModel, setSavingModel] = useState(false);
   const [endpoint, setEndpoint] = useState("openrouter");
   const [endpoints, setEndpoints] = useState<{ key: string; label: string; note: string }[]>([]);
+  const [caps, setCaps] = useState<
+    { id: string; label: string; description: string; enabled: boolean; available: boolean; required: boolean }[]
+  >([]);
   const closeRef = useRef<HTMLButtonElement>(null);
 
   // Modal keyboard support: Escape closes it, and focus moves to the close button on open so
@@ -44,6 +47,10 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
     fetch("/api/dream")
       .then((r) => r.json())
       .then((d) => setEnabled(!!d.enabled))
+      .catch(() => {});
+    fetch("/api/capabilities")
+      .then((r) => r.json())
+      .then((d) => setCaps(d.packs ?? []))
       .catch(() => {});
     fetch("/api/model")
       .then((r) => r.json())
@@ -94,6 +101,15 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
       setResult(null);
     }
   }, [open]);
+
+  const toggleCap = async (id: string, next: boolean) => {
+    setCaps((cs) => cs.map((c) => (c.id === id ? { ...c, enabled: next } : c)));
+    await fetch("/api/capabilities", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, enabled: next }),
+    }).catch(() => {});
+  };
 
   const toggle = async () => {
     const next = !enabled;
@@ -229,6 +245,41 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
                 </p>
               </div>
             </div>
+
+            {/* capability toggles — transparency: turn off what you don't want the agent to use */}
+            {caps.length > 0 && (
+              <div className="border-b border-stone-100 px-6 py-4">
+                <p className="text-sm font-medium text-stone-900">What Errand can do</p>
+                <p className="mt-0.5 text-[13px] leading-relaxed text-stone-500">
+                  Turn off anything you'd rather Errand not use. Files stays on.
+                </p>
+                <ul className="mt-3 space-y-3">
+                  {caps.map((c) => (
+                    <li key={c.id} className="flex items-center justify-between gap-4">
+                      <div className="min-w-0">
+                        <p className="text-[13px] font-medium text-stone-800">
+                          {c.label}
+                          {!c.available && <span className="ml-1.5 text-[11px] font-normal text-stone-400">needs setup</span>}
+                        </p>
+                        <p className="text-[12px] leading-snug text-stone-500">{c.description}</p>
+                      </div>
+                      <button
+                        onClick={() => !c.required && c.available && toggleCap(c.id, !c.enabled)}
+                        role="switch"
+                        aria-checked={c.enabled}
+                        aria-label={c.label}
+                        disabled={c.required || !c.available}
+                        className={`relative h-6 w-11 shrink-0 rounded-full transition disabled:cursor-not-allowed disabled:opacity-50 ${c.enabled ? "bg-accent-600" : "bg-stone-200"}`}
+                      >
+                        <span
+                          className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${c.enabled ? "left-[1.375rem]" : "left-0.5"}`}
+                        />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
 
             {/* dreaming controls */}
             <div className="border-b border-stone-100 px-6 py-4">

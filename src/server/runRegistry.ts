@@ -6,7 +6,7 @@ import { Session } from "../session.ts";
 import { Journal } from "../journal.ts";
 import { Logger } from "../log.ts";
 import { Registry } from "../tools/index.ts";
-import { buildRegistryFor, DEFAULT_PACKS } from "../capabilities/index.ts";
+import { buildRegistryFor, enabledPacks } from "../capabilities/index.ts";
 import { makeClient } from "../client.ts";
 import { ENDPOINTS } from "../models.ts";
 import { AgentRunner } from "../loop.ts";
@@ -96,9 +96,10 @@ if (!g.__errandReconciled) {
 }
 
 function buildRegistry(): Registry {
-  // Consumer default: the no-auth capability packs (files/web/browser/memory). General `bash`
-  // is the "power path" (decision #4) and is intentionally NOT in any web pack yet.
-  return buildRegistryFor(DEFAULT_PACKS);
+  // The packs the user has enabled in Settings (defaults to the no-auth consumer surface
+  // files/web/browser/memory; 'files' always forced on). General `bash` is the "power path"
+  // (decision #4) and is intentionally NOT in any web pack yet.
+  return buildRegistryFor(enabledPacks(store.getSetting("packs")));
 }
 
 // The model new runs use: the user's saved choice (Settings → model switcher) or the env

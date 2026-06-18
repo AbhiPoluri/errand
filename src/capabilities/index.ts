@@ -27,6 +27,18 @@ export function isAvailable(cap: Capability): boolean {
   return (cap.requiresEnv ?? []).every((k) => !!process.env[k]);
 }
 
+// Which packs are ENABLED for runs: the user's saved choice (Settings) or DEFAULT_PACKS when
+// unset. 'files' is ALWAYS forced on so the core file surface can never be emptied, and unknown
+// ids are dropped. `saved` is the raw comma-separated value from the `packs` setting.
+export function enabledPacks(saved: string): string[] {
+  const ids = saved.trim()
+    ? saved.split(",").map((s) => s.trim()).filter(Boolean)
+    : [...DEFAULT_PACKS];
+  const set = new Set(ids.filter((id) => CAPABILITIES.some((c) => c.id === id)));
+  set.add("files");
+  return [...set];
+}
+
 export function capability(id: string): Capability | undefined {
   return CAPABILITIES.find((c) => c.id === id);
 }
