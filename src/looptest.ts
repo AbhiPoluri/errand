@@ -333,11 +333,44 @@ async function testNoRetryAfterOutput() {
   check("create called once (did NOT retry after output)", call === 1, `${call}`);
 }
 
+async function testNoRetryOnPermanentError() {
+  console.log("\n== 11. a permanent 4xx (bad model/key) is NOT retried ==");
+  const registry = new Registry().register(stubTool("do_thing", { result: { ok: true } }));
+  const runId = crypto.randomUUID();
+  const session = new Session(SYSTEM);
+  const tap = new Tap();
+  let call = 0;
+  const client = {
+    chat: {
+      completions: {
+        create: async () => {
+          call++;
+          const e: any = new Error("Unknown model");
+          e.status = 404;
+          throw e;
+        },
+      },
+    },
+  } as unknown as OpenAI;
+  const runner = new AgentRunner({ session, sink: tap, registry, model: "stub", logger: new Logger(runId), runId, client, stream: false });
+  const prev = process.env.RETRY_BACKOFF_MS;
+  process.env.RETRY_BACKOFF_MS = "0";
+  try {
+    await runner.send("bad model", new AbortController().signal);
+  } finally {
+    if (prev === undefined) delete process.env.RETRY_BACKOFF_MS;
+    else process.env.RETRY_BACKOFF_MS = prev;
+  }
+  check("permanent 4xx surfaced a transport error", tap.events.some((e) => e.type === "run.error" && e.kind === "transport"));
+  check("create called ONCE (a 4xx is not retried)", call === 1, `${call}`);
+}
+
 async function main() {
   await testFailingActionAborts();
   await testStreamIdleWatchdog();
   await testRetryBeforeOutput();
   await testNoRetryAfterOutput();
+  await testNoRetryOnPermanentError();
   await testDistinctSuccessesDoNotAbort();
   await testIdenticalSuccessLoopAborts();
   await testDeniedApprovalsDoNotAbort();

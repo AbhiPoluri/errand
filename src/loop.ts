@@ -204,12 +204,32 @@ export class AgentRunner {
           return "";
         }
         this.o.logger.log("transport_error", String(err?.stack ?? err));
-        // Retry ONLY a transient failure that struck BEFORE any token/tool was emitted this turn —
-        // retrying after output would duplicate it. (Cancel/length/content_filter never throw here.)
-        if (attempt < maxRetries && content === "" && toolAcc.length === 0) {
+        // Retry ONLY a TRANSIENT failure that struck BEFORE any token/tool was emitted this turn —
+        // retrying after output would duplicate it, and retrying a deterministic 4xx (bad model id,
+        // bad key, malformed request) just wastes round-trips. A connection error / idle-watchdog
+        // throw carries no status (→ retry); a 408/409/429/5xx is retryable; a 4xx is not.
+        const status = (err as any)?.status;
+        const retryable =
+          status === undefined || status === 408 || status === 409 || status === 429 || (typeof status === "number" && status >= 500);
+        if (attempt < maxRetries && retryable && content === "" && toolAcc.length === 0) {
           attempt++;
           await this.emit({ type: "thinking.summary", summary: "Reconnecting…" });
-          await new Promise((r) => setTimeout(r, backoffMs * attempt + Math.floor(Math.random() * backoffMs)));
+          // Abortable backoff: if the user hits Stop during the wait, react immediately rather than
+          // waiting the timer out and only then noticing on the next create().
+          await new Promise<void>((resolve) => {
+            const done = () => {
+              clearTimeout(t);
+              signal.removeEventListener("abort", done);
+              resolve();
+            };
+            const t = setTimeout(done, backoffMs * attempt + Math.floor(Math.random() * backoffMs));
+            if (signal.aborted) return done();
+            signal.addEventListener("abort", done, { once: true });
+          });
+          if (signal.aborted) {
+            await this.emit({ type: "run.error", kind: "cancelled", userMessage: "Okay, I stopped.", recoverable: true });
+            return "";
+          }
           reasoning = "";
           finishReason = null;
           usage = null;

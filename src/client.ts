@@ -15,6 +15,10 @@ export function makeClient(baseURL: string, apiKey: string): OpenAI {
     baseURL,
     apiKey: apiKey || "unused", // local servers ignore it, but the SDK requires a non-empty value
     timeout: CLIENT_TIMEOUT_MS,
+    // The agent loop owns retry+backoff (with a user-visible "Reconnecting…" beat and a
+    // don't-retry-after-output guard the SDK can't know about). Disable the SDK's own 2 retries so
+    // the two layers don't compound into ~9 HTTP requests for one transient failure.
+    maxRetries: 0,
     defaultHeaders: {
       "HTTP-Referer": config.appReferer,
       "X-Title": config.appTitle,
