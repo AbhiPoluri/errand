@@ -19,6 +19,7 @@
     "store:test": "tsx src/storetest.ts",
     "websink:test": "tsx src/server/websinktest.ts",
     "ext:test": "tsx src/exttest.ts",
+    "bash:test": "tsx src/bashTest.ts",
     "restart:test": "tsx src/restartTest.ts",
     "doc:test": "tsx src/docTest.ts",
     "ocr:test": "tsx src/ocrTest.ts",

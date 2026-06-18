@@ -92,11 +92,15 @@ export const bash: Tool<Args> = {
       };
       ctx.signal.addEventListener("abort", onAbort, { once: true });
 
+      // Cap on APPEND, not just at the end: `out += d.toString()` would retain the FULL accumulated
+      // output in RAM (a chatty command — a build log, cat of a big file — could spike to tens of MB
+      // and risk an OOM mid-turn), even though only OUTPUT_CAP is ever returned. Slice each chunk to
+      // the remaining budget so the accumulator never exceeds OUTPUT_CAP.
       child.stdout.on("data", (d) => {
-        if (out.length < OUTPUT_CAP) out += d.toString();
+        if (out.length < OUTPUT_CAP) out += d.toString().slice(0, OUTPUT_CAP - out.length);
       });
       child.stderr.on("data", (d) => {
-        if (err.length < OUTPUT_CAP) err += d.toString();
+        if (err.length < OUTPUT_CAP) err += d.toString().slice(0, OUTPUT_CAP - err.length);
       });
       child.on("error", (e) => {
         clearTimeout(timer);
@@ -110,8 +114,8 @@ export const bash: Tool<Args> = {
         if (killed) return resolve({ ok: false, error: "killed", data: { stdout: out, stderr: err } });
         resolve({
           ok: code === 0,
-          data: { code, stdout: out.slice(0, OUTPUT_CAP), stderr: err.slice(0, OUTPUT_CAP) },
-          bytes: out.length + err.length,
+          data: { code, stdout: out, stderr: err }, // already capped on append
+          bytes: out.length + err.length, // accurate now: each accumulator is <= OUTPUT_CAP
           error: code === 0 ? undefined : `exit_${code}`,
         });
       });
