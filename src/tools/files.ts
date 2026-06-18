@@ -183,12 +183,27 @@ export const writeFile: Tool<{ path: string; content: string }> = {
       const existedBefore = exists(abs);
       if (existedBefore) assertRealWithin(ctx.roots, abs);
       const prior = existedBefore ? readFileSync(abs) : null;
+      // Snapshot prior bytes to disk so this write is undoable even AFTER a restart (when the
+      // in-memory `prior` buffer is gone). Best-effort: if snapshotting fails, snapshot stays
+      // null and restart-undo refuses to touch the file rather than risk deleting it.
+      let snapshot: string | null = null;
+      if (prior !== null) {
+        try {
+          const snapDir = join(ctx.workspaceRoot, ".errand-review", ctx.runId, ".snapshots");
+          mkdirSync(snapDir, { recursive: true });
+          snapshot = join(snapDir, crypto.randomUUID());
+          writeFileSync(snapshot, prior);
+        } catch {
+          snapshot = null;
+        }
+      }
       mkdirSync(dirname(abs), { recursive: true });
       writeFileSync(abs, a.content, "utf8");
       ctx.journal.record({
         op: "write",
         description: `${existedBefore ? "Updated" : "Created"} ${name(abs)}`,
         reversibility: "reversible",
+        manifest: { kind: "write", path: abs, wasNew: !existedBefore, snapshot },
         inverse: async () => {
           if (prior === null) rmSync(abs, { force: true });
           else writeFileSync(abs, prior);
@@ -231,6 +246,7 @@ export const makeFolder: Tool<{ path: string }> = {
         op: "make_folder",
         description: `Made the folder ${name(abs)}`,
         reversibility: "reversible",
+        manifest: { kind: "make_folder", path: abs },
         inverse: async () => {
           try {
             rmdirSync(abs); // removes only if still empty; throws (and we leave it) if filled
@@ -281,6 +297,7 @@ export const moveFile: Tool<{ from: string; to: string }> = {
         op: "move",
         description: `Moved ${name(from)} to ${name(to)}`,
         reversibility: "reversible",
+        manifest: { kind: "move", from, to },
         inverse: async () => renameSync(to, from),
       });
       return { ok: true, data: { from, to } };
@@ -325,6 +342,7 @@ export const copyFile: Tool<{ from: string; to: string }> = {
         op: "copy",
         description: `Copied ${name(from)} to ${name(to)}`,
         reversibility: "reversible",
+        manifest: { kind: "copy", to },
         inverse: async () => rmSync(to, { recursive: true, force: true }),
       });
       return { ok: true, data: { from, to } };
@@ -373,6 +391,7 @@ export const deleteFile: Tool<{ path: string }> = {
         op: "delete",
         description: `Moved ${name(abs)} to the Review folder`,
         reversibility: "reversible",
+        manifest: { kind: "delete", from: abs, dest },
         inverse: async () => renameSync(dest, abs),
       });
       return { ok: true, data: { original: abs, review: dest } };
@@ -429,6 +448,7 @@ export const renameFile: Tool<{ path: string; newName: string }> = {
         op: "move",
         description: `Renamed ${name(from)} to ${a.newName}`,
         reversibility: "reversible",
+        manifest: { kind: "move", from, to },
         inverse: async () => renameSync(to, from),
       });
       return { ok: true, data: { from, to } };

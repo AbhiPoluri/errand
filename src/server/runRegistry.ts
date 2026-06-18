@@ -14,6 +14,7 @@ import { SYSTEM_PROMPT } from "../prompt.ts";
 import { WebSink } from "./webSink.ts";
 import * as store from "./store.ts";
 import { dream } from "./dream.ts";
+import { rebuildJournalFromStore } from "./journalRestore.ts";
 
 // Reflect after a task settles — only if dreaming is on, debounced so it doesn't run
 // after every turn. Fire-and-forget; failures are silent.
@@ -149,6 +150,21 @@ function attachPersistence(entry: RunEntry): void {
   });
 }
 
+// Persist this run's journal manifest (idempotent via INSERT OR IGNORE). The live in-memory
+// inverses still drive Undo while the run is in memory; this lets rebuildJournalFromStore
+// reconstruct them after a restart or eviction.
+function persistJournal(entry: RunEntry): void {
+  for (const e of entry.session.journal.list()) {
+    store.appendJournalOp(entry.runId, {
+      opId: e.id,
+      op: e.op,
+      description: e.description,
+      reversibility: e.reversibility,
+      manifest: e.manifest,
+    });
+  }
+}
+
 function runTurn(entry: RunEntry, message: string): void {
   entry.abort = new AbortController(); // fresh per turn (AbortController is one-shot)
   entry.busy = true;
@@ -162,6 +178,7 @@ function runTurn(entry: RunEntry, message: string): void {
       // kicking off dreaming failing should be silent, not fatal.
       try {
         store.setMessages(entry.runId, entry.session.messages); // durable conversation
+        if (!entry.deleted) persistJournal(entry); // so Undo survives a restart / eviction
         maybeDream(); // reflect after the task settles (if dreaming is on)
       } catch (err) {
         console.warn(`[errand] post-turn persistence failed for run ${entry.runId} (continuing):`, err);
@@ -213,6 +230,9 @@ function rehydrate(runId: string): RunEntry | undefined {
   const events = store.getEvents(runId);
   const session = new Session(SYSTEM_PROMPT);
   if (stored.messages.length) session.loadMessages(stored.messages as any);
+  // Restore the journal from its persisted manifest so Undo still works on this run (its live
+  // inverse closures died with the previous process). No-op for runs that changed nothing.
+  rebuildJournalFromStore(runId, session.journal);
   const sink = new WebSink();
   sink.preload(events);
   const maxSeq = events.length ? events[events.length - 1].seq : -1;
@@ -321,10 +341,12 @@ export async function sendMessage(runId: string, message: string): Promise<"ok" 
 }
 
 // Undo every reversible op this run journaled (delete→restore, write→prior bytes, …).
+// getRun (not runs.get) so a completed run that's no longer in memory — or any run after a
+// server restart — rehydrates and rebuilds its journal from the manifest, instead of 404ing.
 export async function undoRun(
   runId: string,
 ): Promise<{ undone: number; failed: number; skipped: number } | null> {
-  const entry = runs.get(runId);
+  const entry = getRun(runId);
   if (!entry) return null;
   return entry.session.journal.undoAll();
 }

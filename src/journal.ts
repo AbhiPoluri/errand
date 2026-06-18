@@ -17,13 +17,18 @@ export interface JournalEntry {
   // Present ONLY when truly undoable. Restores the prior state; must be idempotent-safe.
   // Undo eligibility is THIS, not the label — a 'reversible' label with no inverse is a lie.
   inverse?: () => Promise<void>;
+  // Serializable description of the op (e.g. {kind:"move", from, to}) — persisted so the
+  // inverse can be RECONSTRUCTED after a restart, when the live `inverse` closure is gone.
+  manifest?: unknown;
 }
 
 export class Journal {
   private entries: JournalEntry[] = [];
 
-  record(entry: Omit<JournalEntry, "id" | "ts">): string {
-    const id = crypto.randomUUID();
+  // `id` is normally generated; rebuildJournalFromStore passes the persisted opId so the same
+  // entry re-persists idempotently (INSERT OR IGNORE) instead of duplicating on the next turn.
+  record(entry: Omit<JournalEntry, "id" | "ts"> & { id?: string }): string {
+    const id = entry.id ?? crypto.randomUUID();
     // If something claims 'reversible' but recorded no inverse, demote it — never lie.
     const reversibility: Reversibility =
       entry.reversibility === "reversible" && typeof entry.inverse !== "function" ? "unknown" : entry.reversibility;

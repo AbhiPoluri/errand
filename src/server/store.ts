@@ -60,6 +60,15 @@ db.exec(`
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS journal (
+    runId TEXT NOT NULL,
+    opId TEXT NOT NULL,
+    op TEXT NOT NULL,
+    description TEXT NOT NULL,
+    reversibility TEXT NOT NULL,
+    manifest TEXT,
+    PRIMARY KEY (runId, opId)
+  );
 `);
 
 // Migration: add the embedding column to memories tables created before retrieval existed.
@@ -84,6 +93,12 @@ const stmtList = db.prepare(
 );
 const stmtEvents = db.prepare(`SELECT payload FROM events WHERE runId = ? ORDER BY seq ASC`);
 const stmtRun = db.prepare(`SELECT runId, title, createdAt, roots, messages FROM runs WHERE runId = ?`);
+const stmtAddJournal = db.prepare(
+  `INSERT OR IGNORE INTO journal (runId, opId, op, description, reversibility, manifest) VALUES (?, ?, ?, ?, ?, ?)`,
+);
+const stmtJournal = db.prepare(
+  `SELECT opId, op, description, reversibility, manifest FROM journal WHERE runId = ? ORDER BY rowid ASC`,
+);
 
 export function createRun(runId: string, title: string, createdAt: number, roots: string[]): void {
   stmtCreate.run(runId, title, createdAt, JSON.stringify(roots), Date.now());
@@ -132,9 +147,44 @@ export function getEvents(runId: string): AgentEvent[] {
   return out;
 }
 
+// ---- journal manifest (so Undo survives a restart / a run falling out of memory) ----
+// A serializable record of each reversible op a run performed, enough to RECONSTRUCT its
+// inverse after the in-memory Journal (with its live closures) is gone. The live path still
+// uses the in-memory closures; this is the restart fallback. INSERT OR IGNORE keyed by
+// (runId, opId) makes re-persisting a run's journal each turn idempotent.
+export interface JournalOp {
+  opId: string;
+  op: string;
+  description: string;
+  reversibility: string;
+  manifest: unknown; // {kind, ...paths} — shape per op; parsed back from JSON
+}
+
+export function appendJournalOp(runId: string, rec: JournalOp): void {
+  stmtAddJournal.run(
+    runId,
+    rec.opId,
+    rec.op,
+    rec.description,
+    rec.reversibility,
+    rec.manifest != null ? JSON.stringify(rec.manifest) : null,
+  );
+}
+
+export function getJournalOps(runId: string): JournalOp[] {
+  return (stmtJournal.all(runId) as any[]).map((r) => ({
+    opId: r.opId,
+    op: r.op,
+    description: r.description,
+    reversibility: r.reversibility,
+    manifest: safeParse<unknown>(r.manifest, null),
+  }));
+}
+
 // Permanently remove a run and its full event stream (user clears it from Recently).
 export function deleteRun(runId: string): void {
   db.prepare("DELETE FROM events WHERE runId = ?").run(runId);
+  db.prepare("DELETE FROM journal WHERE runId = ?").run(runId);
   db.prepare("DELETE FROM runs WHERE runId = ?").run(runId);
 }
 
