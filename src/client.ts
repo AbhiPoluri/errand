@@ -3,11 +3,18 @@
 import OpenAI from "openai";
 import { config } from "./config.ts";
 
-export const client = new OpenAI({
-  baseURL: config.baseURL,
-  apiKey: config.apiKey,
-  defaultHeaders: {
-    "HTTP-Referer": config.appReferer,
-    "X-Title": config.appTitle,
-  },
-});
+// Build a client for ANY OpenAI-compatible endpoint — OpenRouter (cloud), a local Ollama
+// server, or any compatible baseURL. The attribution headers are harmless on other servers.
+export function makeClient(baseURL: string, apiKey: string): OpenAI {
+  return new OpenAI({
+    baseURL,
+    apiKey: apiKey || "unused", // local servers ignore it, but the SDK requires a non-empty value
+    defaultHeaders: {
+      "HTTP-Referer": config.appReferer,
+      "X-Title": config.appTitle,
+    },
+  });
+}
+
+// Default client (OpenRouter). Used by embeddings + dreaming regardless of the agent's endpoint.
+export const client = makeClient(config.baseURL, config.apiKey);

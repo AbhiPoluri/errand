@@ -6,6 +6,8 @@ import { Session } from "../session.ts";
 import { Logger } from "../log.ts";
 import { Registry } from "../tools/index.ts";
 import { buildRegistryFor, DEFAULT_PACKS } from "../capabilities/index.ts";
+import { makeClient } from "../client.ts";
+import { ENDPOINTS } from "../models.ts";
 import { AgentRunner } from "../loop.ts";
 import { type ApprovalGate, type ApprovalRequest, type Decision } from "../approvals.ts";
 import { SYSTEM_PROMPT } from "../prompt.ts";
@@ -96,6 +98,18 @@ function currentModel(): string {
   return store.getSetting("model", config.model);
 }
 
+// The endpoint (cloud OpenRouter or local Ollama) new runs use, from Settings.
+function currentEndpoint() {
+  const key = store.getSetting("endpoint", "openrouter");
+  return ENDPOINTS.find((e) => e.key === key) ?? ENDPOINTS[0];
+}
+// A client pointed at the active endpoint (the OpenRouter singleton is left for embeddings/dreaming).
+function currentClient() {
+  const ep = currentEndpoint();
+  const apiKey = ep.apiKey ?? (ep.apiKeyEnv ? process.env[ep.apiKeyEnv] : "") ?? "";
+  return makeClient(ep.baseURL, apiKey);
+}
+
 // Prepend what Errand remembers about the user to the base prompt so it just knows them.
 // `query` is the run's first message — used to retrieve only the memories relevant to THIS
 // task (embedding-ranked), instead of dumping every memory into the prompt.
@@ -156,6 +170,8 @@ export async function startRun(message: string, roots?: string[]): Promise<strin
     sink,
     registry: buildRegistry(),
     model: currentModel(),
+    client: currentClient(),
+    stream: currentEndpoint().stream,
     logger: new Logger(runId),
     runId,
     gate: new WebGate(entry),
@@ -196,6 +212,8 @@ function rehydrate(runId: string): RunEntry | undefined {
     sink,
     registry: buildRegistry(),
     model: currentModel(),
+    client: currentClient(),
+    stream: currentEndpoint().stream,
     logger: new Logger(runId),
     runId,
     gate: new WebGate(entry),

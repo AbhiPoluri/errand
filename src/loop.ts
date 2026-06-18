@@ -4,7 +4,7 @@
 // + finish_reason handling, sequential tool calls, cancellation, and the invariant that
 // EVERY assistant tool_call gets a matching tool result so the next request never 400s.
 import type OpenAI from "openai";
-import { client } from "./client.ts";
+import { client as defaultClient } from "./client.ts";
 import { config } from "./config.ts";
 import type { Session } from "./session.ts";
 import type { Logger } from "./log.ts";
@@ -42,6 +42,8 @@ export interface RunnerOpts {
   workspaceRoot?: string;
   roots?: string[]; // allowed read/write roots (defaults to [workspaceRoot])
   startSeq?: number; // resume seq after rehydrating a persisted run (avoids seq collisions)
+  client?: OpenAI; // which OpenAI-compatible endpoint (default: the OpenRouter singleton)
+  stream?: boolean; // small local models do tool-calling better non-streamed (default: true)
 }
 
 export class AgentRunner {
@@ -53,6 +55,9 @@ export class AgentRunner {
   private workspaceRoot: string;
   private roots: string[];
 
+  private readonly client: OpenAI;
+  private readonly stream: boolean;
+
   constructor(private o: RunnerOpts) {
     this.runId = o.runId ?? crypto.randomUUID();
     this.gate = o.gate ?? new AutoDenyGate();
@@ -60,6 +65,8 @@ export class AgentRunner {
     this.roots = o.roots ?? [this.workspaceRoot];
     this.seq = o.startSeq ?? 0;
     this.started = (o.startSeq ?? 0) > 0; // a rehydrated run already emitted run.started
+    this.client = o.client ?? defaultClient;
+    this.stream = o.stream ?? true;
   }
 
   private async emit(body: AgentEventBody): Promise<void> {
@@ -88,49 +95,66 @@ export class AgentRunner {
     for (let i = 0; i < MAX_ITERATIONS; i++) {
       await this.emit({ type: "turn.started", index: i, maxIterations: MAX_ITERATIONS });
 
-      // Stream the completion: emit the visible reply token-by-token (message.delta) so the
-      // Run View feels alive. Reasoning is accumulated + logged but NEVER streamed raw (safety).
-      // tool_call deltas arrive piecemeal (by index) and are reassembled into a normal message,
-      // so the tool-execution logic below is identical to the non-streaming path.
+      // Get the completion. STREAMED (cloud default): emit the visible reply token-by-token
+      // (message.delta) so the Run View feels alive; tool_call deltas arrive piecemeal (by index)
+      // and are reassembled. NON-STREAMED (small local models do tool-calling far better this way):
+      // one response, no deltas. Either way we end up with the same content/toolCalls/reasoning, so
+      // the tool-execution logic below is identical. Reasoning is logged but NEVER streamed raw.
       let content = "";
       let reasoning = "";
       let finishReason: string | null = null;
       let usage: unknown = null;
       const toolAcc: { id: string; type: "function"; function: { name: string; arguments: string } }[] = [];
+      const baseArgs = {
+        model: this.o.model,
+        messages: this.o.session.messages,
+        tools: this.o.registry.schemas(),
+        tool_choice: "auto" as const,
+        parallel_tool_calls: false, // INVARIANT
+      };
       try {
-        const stream = await client.chat.completions.create(
-          {
-            model: this.o.model,
-            messages: this.o.session.messages,
-            tools: this.o.registry.schemas(),
-            tool_choice: "auto",
-            parallel_tool_calls: false, // INVARIANT
-            stream: true,
-            stream_options: { include_usage: true },
-          },
-          { signal },
-        );
-        for await (const chunk of stream) {
-          if (chunk.usage) usage = chunk.usage;
-          const ch = chunk.choices?.[0];
-          if (!ch) continue;
-          if (ch.finish_reason) finishReason = ch.finish_reason;
-          const delta = ch.delta as any;
-          if (typeof delta?.content === "string" && delta.content) {
-            content += delta.content;
-            await this.emit({ type: "message.delta", text: delta.content });
-          }
-          const r = delta?.reasoning ?? delta?.reasoning_content;
-          if (typeof r === "string" && r) reasoning += r;
-          if (Array.isArray(delta?.tool_calls)) {
-            for (const tc of delta.tool_calls) {
-              const idx = typeof tc.index === "number" ? tc.index : toolAcc.length;
-              const acc = (toolAcc[idx] ??= { id: "", type: "function", function: { name: "", arguments: "" } });
-              if (tc.id) acc.id = tc.id;
-              if (tc.function?.name) acc.function.name += tc.function.name;
-              if (tc.function?.arguments) acc.function.arguments += tc.function.arguments;
+        if (this.stream) {
+          const stream = await this.client.chat.completions.create(
+            { ...baseArgs, stream: true, stream_options: { include_usage: true } },
+            { signal },
+          );
+          for await (const chunk of stream) {
+            if (chunk.usage) usage = chunk.usage;
+            const ch = chunk.choices?.[0];
+            if (!ch) continue;
+            if (ch.finish_reason) finishReason = ch.finish_reason;
+            const delta = ch.delta as any;
+            if (typeof delta?.content === "string" && delta.content) {
+              content += delta.content;
+              await this.emit({ type: "message.delta", text: delta.content });
+            }
+            const r = delta?.reasoning ?? delta?.reasoning_content;
+            if (typeof r === "string" && r) reasoning += r;
+            if (Array.isArray(delta?.tool_calls)) {
+              for (const tc of delta.tool_calls) {
+                const idx = typeof tc.index === "number" ? tc.index : toolAcc.length;
+                const acc = (toolAcc[idx] ??= { id: "", type: "function", function: { name: "", arguments: "" } });
+                if (tc.id) acc.id = tc.id;
+                if (tc.function?.name) acc.function.name += tc.function.name;
+                if (tc.function?.arguments) acc.function.arguments += tc.function.arguments;
+              }
             }
           }
+        } else {
+          const res = await this.client.chat.completions.create(baseArgs, { signal });
+          const m: any = res.choices?.[0]?.message ?? {};
+          content = typeof m.content === "string" ? m.content : "";
+          reasoning = typeof m.reasoning === "string" ? m.reasoning : typeof m.reasoning_content === "string" ? m.reasoning_content : "";
+          finishReason = res.choices?.[0]?.finish_reason ?? null;
+          usage = res.usage ?? null;
+          for (const tc of Array.isArray(m.tool_calls) ? m.tool_calls : []) {
+            const a = tc.function?.arguments;
+            // Some local servers return arguments as a parsed object, not a JSON string —
+            // normalize to a string since the registry JSON.parses it.
+            const argStr = typeof a === "string" ? a : a != null ? JSON.stringify(a) : "";
+            toolAcc.push({ id: tc.id ?? "", type: "function", function: { name: tc.function?.name ?? "", arguments: argStr } });
+          }
+          // No deltas were streamed; the reply (if no tools) is emitted via message.completed below.
         }
       } catch (err: any) {
         if (signal.aborted || err?.name === "AbortError") {

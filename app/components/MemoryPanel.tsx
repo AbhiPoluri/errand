@@ -20,6 +20,8 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
   const [presets, setPresets] = useState<{ id: string; label: string; note: string }[]>([]);
   const [customModel, setCustomModel] = useState("");
   const [savingModel, setSavingModel] = useState(false);
+  const [endpoint, setEndpoint] = useState("openrouter");
+  const [endpoints, setEndpoints] = useState<{ key: string; label: string; note: string }[]>([]);
 
   const load = () => {
     fetch("/api/memory")
@@ -36,8 +38,28 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
         setModel(d.current ?? "");
         setPresets(d.presets ?? []);
         setCustomModel(d.current ?? "");
+        setEndpoint(d.endpoint ?? "openrouter");
+        setEndpoints(d.endpoints ?? []);
       })
       .catch(() => {});
+  };
+
+  // Switch where the agent runs (cloud OpenRouter or local Ollama). Keep the model compatible:
+  // OpenRouter ids contain a "/", Ollama tags (e.g. "llama3.2:3b") don't.
+  const chooseEndpoint = async (key: string) => {
+    setEndpoint(key);
+    const body: { endpoint: string; model?: string } = { endpoint: key };
+    if (key === "ollama" && model.includes("/")) body.model = "llama3.2:3b";
+    if (key === "openrouter" && !model.includes("/")) body.model = "deepseek/deepseek-v4-flash:nitro";
+    if (body.model) {
+      setModel(body.model);
+      setCustomModel(body.model);
+    }
+    await fetch("/api/model", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).catch(() => {});
   };
 
   // Switch the model new tasks use (persisted; takes effect next task).
@@ -129,30 +151,44 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
               </button>
             </div>
 
-            {/* model switcher */}
+            {/* model + endpoint switcher */}
             <div className="border-b border-stone-100 px-6 py-4">
               <p className="text-sm font-medium text-stone-900">Model</p>
               <p className="mt-0.5 text-[13px] leading-relaxed text-stone-500">
-                Which AI model runs your tasks. Takes effect on your next task.
+                Where the agent runs and which model. Takes effect on your next task.
               </p>
-              <div className="mt-2.5 space-y-2">
+              {endpoints.length > 1 && (
                 <select
-                  value={presets.some((p) => p.id === model) ? model : "__custom"}
-                  onChange={(e) => {
-                    if (e.target.value !== "__custom") chooseModel(e.target.value);
-                  }}
+                  value={endpoint}
+                  onChange={(e) => chooseEndpoint(e.target.value)}
                   disabled={savingModel}
-                  className="w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-[13px] text-stone-800 outline-none transition focus:border-accent-600/50 disabled:opacity-60"
+                  className="mt-2.5 w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-[13px] text-stone-800 outline-none transition focus:border-accent-600/50 disabled:opacity-60"
                 >
-                  {presets.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.label} — {p.note}
+                  {endpoints.map((e) => (
+                    <option key={e.key} value={e.key}>
+                      {e.label} — {e.note}
                     </option>
                   ))}
-                  {!presets.some((p) => p.id === model) && model && (
-                    <option value="__custom">Custom: {model}</option>
-                  )}
                 </select>
+              )}
+              <div className="mt-2 space-y-2">
+                {endpoint === "openrouter" && (
+                  <select
+                    value={presets.some((p) => p.id === model) ? model : "__custom"}
+                    onChange={(e) => {
+                      if (e.target.value !== "__custom") chooseModel(e.target.value);
+                    }}
+                    disabled={savingModel}
+                    className="w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-[13px] text-stone-800 outline-none transition focus:border-accent-600/50 disabled:opacity-60"
+                  >
+                    {presets.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.label} — {p.note}
+                      </option>
+                    ))}
+                    {!presets.some((p) => p.id === model) && model && <option value="__custom">Custom: {model}</option>}
+                  </select>
+                )}
                 <div className="flex items-center gap-2">
                   <input
                     value={customModel}
@@ -161,7 +197,7 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
                       if (e.key === "Enter") chooseModel(customModel);
                     }}
                     spellCheck={false}
-                    placeholder="or any OpenRouter model id"
+                    placeholder={endpoint === "ollama" ? "Ollama model, e.g. llama3.2:3b" : "or any OpenRouter model id"}
                     className="min-w-0 flex-1 rounded-lg border border-stone-200 bg-white px-3 py-1.5 font-mono text-[12px] text-stone-700 outline-none transition focus:border-accent-600/50"
                   />
                   <button
