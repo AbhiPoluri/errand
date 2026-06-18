@@ -4,6 +4,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import type { AgentEvent } from "../events.ts";
+import type { OpManifest } from "../journal.ts";
 import type { RunSummary } from "./runRegistry.ts";
 import { embed, embedMany, cosineSimilarity } from "./embed.ts";
 
@@ -166,10 +167,13 @@ export interface JournalOp {
   op: string;
   description: string;
   reversibility: string;
-  manifest: unknown; // {kind, ...paths} — shape per op; parsed back from JSON
+  manifest: OpManifest | null; // parsed back from JSON; null if absent/corrupt
 }
 
-export function appendJournalOp(runId: string, rec: JournalOp): void {
+export function appendJournalOp(
+  runId: string,
+  rec: { opId: string; op: string; description: string; reversibility: string; manifest?: OpManifest | null },
+): void {
   stmtAddJournal.run(
     runId,
     rec.opId,
@@ -186,7 +190,7 @@ export function getJournalOps(runId: string): JournalOp[] {
     op: r.op,
     description: r.description,
     reversibility: r.reversibility,
-    manifest: safeParse<unknown>(r.manifest, null),
+    manifest: safeParse<OpManifest | null>(r.manifest, null),
   }));
 }
 

@@ -8,6 +8,18 @@
 
 import type { Reversibility } from "./tools/index.ts";
 
+// Serializable description of a reversible op — the source of truth for reconstructing its inverse
+// after a restart (when the live closure is gone). Discriminated on `kind` so the producers (the
+// file tools) and the consumer (reconstructInverse) agree at compile time and the switch is
+// exhaustive: a typo like `to` instead of `dest` for a delete becomes a tsc error, not a silently
+// non-undoable op.
+export type OpManifest =
+  | { kind: "move"; from: string; to: string } // move_file + rename_file
+  | { kind: "delete"; from: string; dest: string }
+  | { kind: "copy"; to: string }
+  | { kind: "make_folder"; path: string }
+  | { kind: "write"; path: string; wasNew: boolean; snapshot?: string | null };
+
 export interface JournalEntry {
   id: string;
   op: string; // "move" | "delete" | "write" | "bash" ...
@@ -17,9 +29,9 @@ export interface JournalEntry {
   // Present ONLY when truly undoable. Restores the prior state; must be idempotent-safe.
   // Undo eligibility is THIS, not the label — a 'reversible' label with no inverse is a lie.
   inverse?: () => Promise<void>;
-  // Serializable description of the op (e.g. {kind:"move", from, to}) — persisted so the
-  // inverse can be RECONSTRUCTED after a restart, when the live `inverse` closure is gone.
-  manifest?: unknown;
+  // Serializable description of the op — persisted so the inverse can be RECONSTRUCTED after a
+  // restart, when the live `inverse` closure is gone.
+  manifest?: OpManifest;
 }
 
 export class Journal {
