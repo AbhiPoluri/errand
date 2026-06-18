@@ -43,8 +43,23 @@ Trust-critical correctness → cheap perf/resilience → new tools+tests → tes
 Full plans + verify steps: workflow output `wjw139l7i.output`. Cross-cutting: 1/2/12/13/14
 all touch files.ts+journal — batch together. 3+15 share looptest.ts.
 
-## Shipped tonight
-_(none yet)_
+## Shipped tonight (newest last) — branch `overnight-2026-06-18`
+- **rank 7** store: SQLite WAL + synchronous=NORMAL + busy_timeout. ✅ tsc, restart+mem
+- **rank 4** store: safeParse guards on getEvents/getStoredRun + reconcileOrphans boot-guard. ✅
+- **rank 10** runRegistry: try/catch persistence writes (sink + runTurn.finally). ✅ tsc
+- **rank 3** loop: post-run stuck-detection (consecutive failures only) + offline looptest. ✅ loop:test
+- **rank 8** loop: skip per-token Logger.log on streaming deltas. ✅
+- **rank 9** api/runs: calm JSON on startRun throw, not raw 500. ✅ tsc
+- **rank 6** dream: Zod-validate model output before destructive de-dup. ✅ tsc
+- **rank 5** web_search: per-block snippet parse (no drift) + offline webtest. ✅ web:test
+- **rank 22** files: relocate misplaced relocationPhrase() helper below imports. ✅ tsc
+- **rank 2** files: delete_file unique Review dest (same-basename can't corrupt). ✅ fileops:test
+- **rank 12** files: rename_file tool (basename-only, journaled undo). ✅ fileops:test
+- **rank 13** files: folder_summary tool (bounded recursive disk-usage, read-only). ✅ fileops:test
+- **rank 14** new fileops:test (register/validate/undo round-trip, 28 checks). ✅
+- **rank 1** undo: persist journal manifest → Undo survives restart + out-of-memory runs;
+  undoRun rehydrates (no 404). New `src/server/journalRestore.ts`. ✅ restart:test (extended)
+- New test infra: `src/testutil.ts` (shared wellFormed), `loop:test`, `web:test`, `fileops:test`.
 
 ## Parked / needs Abhiram
 _(none yet)_
