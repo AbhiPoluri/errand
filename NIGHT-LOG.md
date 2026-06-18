@@ -59,7 +59,35 @@ all touch files.ts+journal — batch together. 3+15 share looptest.ts.
 - **rank 14** new fileops:test (register/validate/undo round-trip, 28 checks). ✅
 - **rank 1** undo: persist journal manifest → Undo survives restart + out-of-memory runs;
   undoRun rehydrates (no 404). New `src/server/journalRestore.ts`. ✅ restart:test (extended)
-- New test infra: `src/testutil.ts` (shared wellFormed), `loop:test`, `web:test`, `fileops:test`.
+- **rank 15** loop:test: finish_reason exits + malformed tool_call rails (7 cases). ✅
+- **rank 17** new journal:test: demotion, LIFO, partial-failure accounting. ✅
+- **rank 16** embed:test + _setEmbedClient seam: cosine edges, embedMany remap, fail-soft. ✅
+- **rank 18** new store:test: dedup, suggestion cap, settings, malformed-JSON skip. ✅
+- **rank 21** events: prune never-emitted variants (thinking.delta/refusal/cancelled status). ✅
+- **rank 11** webSink: capped delta ring (no O(tokens) RAM) + websink:test. ✅
+- New test infra: `testutil.ts`, `loop:test`, `web:test`, `fileops:test`, `journal:test`,
+  `embed:test`, `store:test`, `websink:test`.
+
+- **rank 19** ui a11y: focus-visible ring, aria-live/roles, modal Esc + focus, labels. ✅ screenshots
+- **rank 20** ui UX: Try-again + Start-something-else on error, autofocus, touch delete,
+  fresh timestamps, mid-run upload errors surfaced. ✅ screenshots (desktop + 375px)
+
+### ALL 22 BACKLOG ITEMS SHIPPED ✅
+Full offline test sweep green (loop/web/fileops/journal/embed/store/websink/restart/cap), tsc clean.
+UI screenshot-verified (Home desktop+375px, Settings open + Esc-close, clay focus ring).
+
+### Adversarial review round (15-agent workflow) → 9 real findings, 7 fixed
+- **FIXED high** loop: stuck-detection reset on success → no-op success loop could burn to 300. Now counts identical successes too. ✅ loop:test
+- **FIXED high** undo: manifest persisted only at turn-settle → mid-turn crash lost data. Now persists on each tool.result. ✅ restart:test
+- **FIXED med** undo: reconstructed move/delete inverses could clobber on double-undo → guard both ends (idempotent). ✅ restart:test
+- **FIXED low** undoRun resurrected evicted runs into the registry → rebuild throwaway journal. ✅
+- **FIXED low** dream dropped ALL items if one malformed → per-element validation. ✅
+- **FIXED low** folder_summary counted .errand-review → skipped. ✅ fileops:test
+- **FIXED low** rename_file rejected valid '..' names → only '.'/'..' segments rejected. ✅ fileops:test
+- **LEFT low** webSink reconnect can gap >400 deltas mid-reply — self-heals via message.completed.
+- **LEFT low** overwrite-snapshot-fail → Undo shown but skips; undoSentence already reports it honestly.
+
+See `MORNING-REPORT.md` for the full summary. 19 commits, all green.
 
 ## Parked / needs Abhiram
 _(none yet)_

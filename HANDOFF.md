@@ -4,6 +4,12 @@
 > folder) — this file is the short "where we are + what's next" so you can start fast.
 > **Newest work is in "Latest session" right below.** All on GitHub `AbhiPoluri/errand` (main, ~9 commits).
 
+> ⚠️ **PENDING REVIEW — overnight branch `overnight-2026-06-18` (19 commits, NOT merged, NOT pushed).**
+> An autonomous overnight session shipped all 22 items of a discovery-pass backlog (correctness,
+> perf, resilience, two new file tools, 8 new test suites, UI a11y) + a self-run adversarial review
+> that fixed 2 high-severity bugs in that work. Read **`MORNING-REPORT.md`** first, then
+> `git diff main..overnight-2026-06-18`. Per-item log in `NIGHT-LOG.md`.
+
 ## What Errand is
 A from-scratch TypeScript AI agent harness with a calm consumer UI for **non-technical
 users**. Built to own every line (no LangChain / agent-SDK / reused code). It does real
