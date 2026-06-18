@@ -14,8 +14,15 @@ locally, **nothing was pushed and `main` is untouched** — review the diff and 
   teardown). 1 deferred for your review (create_zip — a from-scratch ZIP writer). **Reviewed**
   (11-agent): 6 findings (extract_zip had none), 5 fixed, 1 low left (chunked-body bound, not a
   regression, localhost-only).
-- **49 improvements, 3 adversarial-review passes (~19 findings fixed), 46 commits.** `tsc` clean
-  every commit; **11 offline test suites green**; **11 new suites added.** UI screenshot-verified.
+- **Round 4** (higher bar — the quick-win well is thinning): 4 more, incl. a real **security fix**
+  (server-side folder allow-list — a crafted request could've pointed the agent at ~/.ssh), browser
+  click-risk hardening (unlabeled buttons were auto-clicked), `find_files` (search by name/content),
+  web-failure honesty. **Reviewed** (7-agent): 3 findings, all on find_files, all fixed.
+- **53 improvements, 4 adversarial-review passes (~22 findings fixed), 52 commits.** `tsc` clean
+  every commit; **12 offline test suites green**; **12 new suites added.** UI screenshot-verified.
+- **Deferred for your review (2):** `create_zip` and `save_as_document` — both from-scratch binary
+  format *writers* (ZIP / OOXML). Reading is shipped + safe; writing wants your eye (each has a
+  round-trip-through-the-reader test ready to make it safe).
 
 ## Review it
 ```
@@ -117,9 +124,29 @@ test coverage (now that the suites exist):
   piece I didn't want to ship unreviewed; the round-trip test against the existing reader makes it
   safe to add when you're up.
 
-## Suggested next (your call)
-- The two "left" items above, if you want them airtight.
-- v8 Gmail (first OAuth pack — needs your Google Cloud project) / hosting-grade durability
-  (resume mid-flight, multi-worker) — both still open from the §6b roadmap.
+## Round 4 — 4 more (higher bar)
+- **Security:** the folder picker is an allow-list, but the server never enforced it — a crafted
+  `POST /api/runs` with `roots:["~/.ssh"]` made that the agent's working root and the confinement
+  happily operated there. `checkRoots` now requires each root to be one of the offered folders
+  (by resolved real path, so a symlink can't masquerade).
+- **Browser safety:** the click-risk classifier auto-clicked *unlabeled* buttons on your real Chrome
+  and missed common consequential verbs (Continue/Accept/Add to cart/Archive…). Now unlabeled
+  non-navigation elements default to "ask first" and the verb set is widened.
+- **`find_files`:** locate a file by name OR by what's written inside it (text/CSV/MD/PDF/Word/Excel)
+  — the biggest everyday gap (list_files was one level + names only).
+- **Honesty:** the agent won't answer a web question from memory when the page won't open.
 
-Full per-item detail is in `NIGHT-LOG.md`; changelog in `PLAN.md §11`.
+## Why I stopped finding more (and what's left)
+Four discovery rounds in, the safe + high-value + quick-win well has genuinely run shallow — round 4
+already had to reach, and its review found only find_files nits (fixed). What remains is deliberately
+NOT done unsupervised:
+- **`create_zip` / `save_as_document`** — from-scratch ZIP/OOXML *writers*. Reading is shipped + safe;
+  writing binary formats wants your eye (each has a round-trip-through-the-reader test ready).
+- **v8 Gmail / v9 Calendar** — need your Google Cloud project + OAuth consent (not autonomous-safe).
+- **Hosting-grade durability** (resume mid-flight, multi-worker) — a core-run-state refactor; too big
+  to land unreviewed at the tail of a long run.
+- The two low items left from earlier reviews, if you want them airtight.
+
+Everything shipped is on the branch, individually committed, tsc-clean, and test-covered. Review the
+diff (`git diff main..overnight-2026-06-18`) and merge what you like. Per-item log in `NIGHT-LOG.md`;
+changelog in `PLAN.md §11`.

@@ -144,8 +144,24 @@ DEFERRED: 11 (create_zip — from-scratch ZIP writer; wants review). New suite: 
 - **FIXED low** welcome card could flash for returning users → gated on homeLoaded. ✅
 - **LEFT low** /api/ext/result body bound bypassable for chunked bodies (not a regression, localhost-only).
 
-46 commits. Full sweep (loop/web/fileops/journal/embed/store/websink/ext/bash/restart/cap) ALL PASS, tsc clean.
-**Totals: 49 improvements across 3 discovery rounds + 3 adversarial-review passes (~19 findings fixed).**
+46 commits. Full sweep ALL PASS, tsc clean.
+
+### ROUND 4 — 4 more (higher bar; well is thinning) + review
+4th discovery (high bar). Shipped 4 of 5 (save_as_document deferred — from-scratch OOXML writer):
+1. **security** — enforce the folder allow-list server-side in checkRoots (a real scope-escape:
+   a crafted POST could point the agent at ~/.ssh; resolveWithin then confined ops to it). ✅ fileops:test
+2. browser click-risk: widen the consequential-verb set + treat UNLABELED buttons as risky
+   (icon buttons were auto-clicked on the real Chrome). New clickrisk:test. ✅
+3. find_files — locate a file by name OR by what's inside it (text/CSV/MD/PDF/docx/xlsx). ✅ fileops:test
+4. web-failure honesty: don't answer from memory when a page won't open. ✅ web:test
+DEFERRED: 5 (save_as_document — OOXML .docx/.xlsx writer; wants review, like create_zip).
+Round-4 review (7-agent) → 3 findings, ALL on find_files (allow-list + clickrisk: zero):
+- **FIXED med** content scan stringified the whole 50MB file → cap at MAX_READ_BYTES. ✅
+- **FIXED med** find_files ignored ctx.signal (unabortable PDF scan) → bail on abort. ✅
+- **FIXED low** scan-budget consumed before size check + skipped not surfaced → fixed + disclosed. ✅
+New suites: `bash:test`, `clickrisk:test`. 52 commits. Full sweep (12 suites) ALL PASS, tsc clean.
+
+**Totals: 53 improvements across 4 discovery rounds + 4 adversarial-review passes (~22 findings fixed). 2 from-scratch binary writers (create_zip, save_as_document) deferred for review.**
 
 ## Parked / needs Abhiram
 _(none yet)_
