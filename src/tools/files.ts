@@ -31,6 +31,7 @@ import {
   PathError,
 } from "./fileutil.ts";
 import { docKindFor, extractDocument, isImageFile, ocrImage } from "./extract.ts";
+import { extractZip } from "./zip.ts";
 
 // Human phrasing for a move/copy: "into <folder>" when relocating, "to <name>" when renaming.
 function relocationPhrase(verb: string, from: string, to: string): string {
@@ -823,4 +824,5 @@ export const fileTools = [
   renameFile,
   copyFile,
   deleteFile,
+  extractZip,
 ];

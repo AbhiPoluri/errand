@@ -17,6 +17,47 @@ import { tmpdir } from "node:os";
 import { Journal } from "./journal.ts";
 import { Registry, type ToolContext } from "./tools/index.ts";
 import { fileTools, renameFile, moveFile, folderSummary, findDuplicates, recentChanges, deleteFile } from "./tools/files.ts";
+import { extractZip } from "./tools/zip.ts";
+
+// Build a minimal STORED (method 0) zip by hand — enough for extract_zip's reader (it ignores CRC).
+function makeStoredZip(entries: { name: string; content: string }[]): Buffer {
+  const locals: Buffer[] = [];
+  const centrals: Buffer[] = [];
+  let offset = 0;
+  for (const f of entries) {
+    const nameBuf = Buffer.from(f.name, "utf8");
+    const data = Buffer.from(f.content, "utf8");
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0, 8); // method 0 (stored)
+    local.writeUInt32LE(data.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(nameBuf.length, 26);
+    const localFull = Buffer.concat([local, nameBuf, data]);
+    locals.push(localFull);
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(0, 10); // method 0
+    central.writeUInt32LE(data.length, 20);
+    central.writeUInt32LE(data.length, 24);
+    central.writeUInt16LE(nameBuf.length, 28);
+    central.writeUInt32LE(offset, 42);
+    centrals.push(Buffer.concat([central, nameBuf]));
+    offset += localFull.length;
+  }
+  const localPart = Buffer.concat(locals);
+  const cd = Buffer.concat(centrals);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(entries.length, 8);
+  eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(cd.length, 12);
+  eocd.writeUInt32LE(localPart.length, 16);
+  return Buffer.concat([localPart, cd, eocd]);
+}
 
 let failures = 0;
 const check = (name: string, cond: boolean, detail = "") => {
@@ -198,6 +239,32 @@ async function testRecentChanges() {
   rmSync(root, { recursive: true, force: true });
 }
 
+async function testExtractZip() {
+  console.log("\n== extract_zip (r3 rank 10) ==");
+  const root = tmp("errand-zip-");
+  const zipBuf = makeStoredZip([
+    { name: "hello.txt", content: "HELLO" },
+    { name: "sub/world.txt", content: "WORLD" },
+    { name: "../escape.txt", content: "EVIL" }, // zip-slip — must be skipped, never written outside
+  ]);
+  writeFileSync(join(root, "bundle.zip"), zipBuf);
+  const j = new Journal();
+  const res = await extractZip.run({ path: join(root, "bundle.zip") }, ctxFor(root, j));
+  check("extract returned ok", res.ok, JSON.stringify(res.error));
+  const dest = join(root, "bundle");
+  check("hello.txt unpacked with content", existsSync(join(dest, "hello.txt")) && readFileSync(join(dest, "hello.txt"), "utf8") === "HELLO");
+  check("nested sub/world.txt unpacked", existsSync(join(dest, "sub", "world.txt")) && readFileSync(join(dest, "sub", "world.txt"), "utf8") === "WORLD");
+  check("zip-slip entry did NOT escape the dest folder", !existsSync(join(root, "escape.txt")));
+  check("recorded exactly one reversible op", j.reversibleCount() === 1);
+  await j.undoAll();
+  check("undo removed the unpacked folder", !existsSync(dest));
+
+  mkdirSync(dest); // now a folder with that name already exists
+  const res2 = await extractZip.run({ path: join(root, "bundle.zip") }, ctxFor(root, new Journal()));
+  check("refuses when the destination already exists", !res2.ok);
+  rmSync(root, { recursive: true, force: true });
+}
+
 function testRegistryHygiene() {
   console.log("\n== registry hygiene ==");
   const reg = new Registry();
@@ -217,6 +284,7 @@ async function main() {
   await testFindDuplicates();
   await testTruncationHonesty();
   await testRecentChanges();
+  await testExtractZip();
   testRegistryHygiene();
   console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILED"}`);
   process.exit(failures === 0 ? 0 : 1);
