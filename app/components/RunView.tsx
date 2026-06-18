@@ -103,6 +103,22 @@ function undoSentence(r: RunState["undoResult"]): string {
   return parts.join(" ");
 }
 
+// Assemble the whole conversation into clean Markdown for export (the per-reply Copy only grabs
+// one bubble). Pure function of RunState — no server work.
+function buildTranscriptMarkdown(state: RunState): string {
+  const lines: string[] = ["# Errand"];
+  for (const t of state.turns) {
+    lines.push("", "## You", t.user);
+    if (t.reply) lines.push("", "## Errand", t.reply);
+    if (t.problem) lines.push("", "## Snag", t.problem);
+  }
+  if (state.changes.length) {
+    lines.push("", "## What changed");
+    for (const c of state.changes) lines.push(`- ${c.summary}${c.undoable ? "" : " (can't be undone)"}`);
+  }
+  return lines.join("\n");
+}
+
 function dotClass(state: Step["state"]): string {
   switch (state) {
     case "done":
@@ -601,9 +617,27 @@ export function RunView(props: {
           </div>
         </form>
         {(done || errored) && (
-          <button onClick={props.onReset} className="mt-3 px-1 text-sm text-stone-500 transition hover:text-stone-900">
-            Start something else
-          </button>
+          <div className="mt-3 flex items-center gap-4 px-1">
+            <button onClick={props.onReset} className="text-sm text-stone-500 transition hover:text-stone-900">
+              Start something else
+            </button>
+            {state.turns.some((t) => t.reply) && (
+              <button
+                onClick={() => {
+                  const md = buildTranscriptMarkdown(state);
+                  const url = URL.createObjectURL(new Blob([md], { type: "text/markdown" }));
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = "errand-transcript.md";
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}
+                className="text-sm text-stone-500 transition hover:text-stone-900"
+              >
+                Export transcript
+              </button>
+            )}
+          </div>
         )}
       </div>
     </div>

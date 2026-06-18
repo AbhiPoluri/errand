@@ -67,6 +67,16 @@ export default function Page() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
   const [recentQuery, setRecentQuery] = useState("");
+  const [welcomeDismissed, setWelcomeDismissed] = useState(true); // default true to avoid an SSR flash; flipped in an effect
+
+  // Show the first-run welcome only if it hasn't been dismissed before (persisted in localStorage).
+  useEffect(() => {
+    try {
+      setWelcomeDismissed(localStorage.getItem("errand_welcome_dismissed") === "1");
+    } catch {
+      /* localStorage unavailable — leave it hidden */
+    }
+  }, []);
   const [, setClock] = useState(0); // ticks while idle so relative timestamps stay fresh
 
   const idle = run.state.phase === "idle";
@@ -393,6 +403,38 @@ export default function Page() {
           ))}
         </motion.div>
 
+        {/* First-run welcome — only on a truly bare Home (no past runs, no ideas yet) */}
+        {!welcomeDismissed && recent.length === 0 && suggestions.length === 0 && (
+          <motion.div
+            variants={item}
+            className="lift mt-4 flex items-start justify-between gap-3 rounded-2xl border border-stone-200/80 bg-white p-5"
+          >
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-stone-900">New here?</p>
+              <p className="mt-1 text-sm leading-relaxed text-stone-500">
+                I work inside one folder you pick, and I always ask before changing anything. Try one of the examples
+                above, or just tell me what you'd like done.
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                try {
+                  localStorage.setItem("errand_welcome_dismissed", "1");
+                } catch {
+                  /* ignore */
+                }
+                setWelcomeDismissed(true);
+              }}
+              aria-label="Dismiss"
+              className="shrink-0 text-stone-400 transition hover:text-stone-600"
+            >
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden>
+                <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+              </svg>
+            </button>
+          </motion.div>
+        )}
+
         {/* Ideas — proactive suggestions surfaced by dreaming */}
         {suggestions.length > 0 && (
           <motion.div variants={item} className="mt-6 space-y-2">
@@ -453,6 +495,11 @@ export default function Page() {
             {scope && !scope.safe && (
               <p className="mt-2.5 text-xs text-stone-400">
                 I'll only touch files in {scope.label}, and I'll ask before changing anything.
+              </p>
+            )}
+            {scope && scope.safe && (
+              <p className="mt-2.5 text-xs text-stone-400">
+                A private folder just for Errand — drop files in here and I can work on them freely.
               </p>
             )}
           </motion.div>
