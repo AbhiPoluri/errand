@@ -13,7 +13,8 @@ import {
   utimesSync,
 } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
+import { checkRoots, availableFolders } from "./server/folders.ts";
 import { Journal } from "./journal.ts";
 import { Registry, type ToolContext } from "./tools/index.ts";
 import { fileTools, renameFile, moveFile, folderSummary, findDuplicates, recentChanges, deleteFile } from "./tools/files.ts";
@@ -276,6 +277,16 @@ async function testExtractZip() {
   rmSync(root, { recursive: true, force: true });
 }
 
+function testFolderAllowlist() {
+  console.log("\n== folder allow-list enforced server-side (r4 rank 1) ==");
+  const offered = availableFolders()[0]?.path; // the safe workspace — always offered + exists
+  check("an offered folder is allowed", !offered || checkRoots([offered]).ok === true);
+  check("~/.ssh (not offered) is REJECTED", checkRoots([join(homedir(), ".ssh")]).ok === false);
+  check("/tmp (not offered) is REJECTED", checkRoots(["/tmp"]).ok === false);
+  check("the home dir itself (not offered) is REJECTED", checkRoots([homedir()]).ok === false);
+  check("a mix with one bad root is REJECTED", offered ? checkRoots([offered, "/tmp"]).ok === false : true);
+}
+
 function testRegistryHygiene() {
   console.log("\n== registry hygiene ==");
   const reg = new Registry();
@@ -296,6 +307,7 @@ async function main() {
   await testTruncationHonesty();
   await testRecentChanges();
   await testExtractZip();
+  testFolderAllowlist();
   testRegistryHygiene();
   console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILED"}`);
   process.exit(failures === 0 ? 0 : 1);
