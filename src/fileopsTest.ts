@@ -303,6 +303,14 @@ async function testFindFiles() {
 
   const none = await findFiles.run({ query: "zzz-nope-zzz" }, ctxFor(root, new Journal()));
   check("no-match returns empty cleanly", none.ok === true && (none.data?.matches ?? []).length === 0);
+
+  check("binary file counted as skipped", (byContent.data?.skipped ?? 0) >= 1);
+  check("summary surfaces skipped files", /couldn't be searched/.test(findFiles.summarize(byContent)), findFiles.summarize(byContent));
+
+  const ac = new AbortController();
+  ac.abort();
+  const aborted = await findFiles.run({ query: "insurance", mode: "content" }, { ...ctxFor(root, new Journal()), signal: ac.signal });
+  check("aborted scan returns promptly, truncated, no matches", aborted.ok === true && aborted.data?.truncated === true && (aborted.data?.matches ?? []).length === 0);
   rmSync(root, { recursive: true, force: true });
 }
 

@@ -851,7 +851,10 @@ export const findFiles: Tool<
   summarize: (r) => {
     if (!r.ok) return r.summary ?? "I couldn't search those files.";
     const n = r.data?.matches?.length ?? 0;
-    const tail = r.data?.truncated ? " (the folder was too big to search all of it)" : "";
+    const parts: string[] = [];
+    if (r.data?.truncated) parts.push("the folder was too big to search all of it");
+    if (r.data?.skipped) parts.push(`${r.data.skipped} file(s) couldn't be searched`);
+    const tail = parts.length ? ` (${parts.join("; ")})` : "";
     return n ? `Found ${n} matching file(s)${tail}.` : `No matching files found${tail}.`;
   },
   run: async (a, ctx) => {
@@ -871,17 +874,28 @@ export const findFiles: Tool<
       const matches: { path: string; via: "name" | "content"; snippet?: string }[] = [];
 
       const scanContent = async (full: string): Promise<void> => {
+        if (ctx.signal.aborted) {
+          truncated = true;
+          return;
+        }
+        let size: number;
+        try {
+          size = statSync(full).size;
+        } catch {
+          skipped++;
+          return;
+        }
+        if (size > MAX_FILE_BYTES) {
+          skipped++; // cheap reject (statSync only) — doesn't burn the open budget
+          return;
+        }
         if (contentScans >= MAX_CONTENT_SCANS) {
           truncated = true;
           return;
         }
-        contentScans++;
+        contentScans++; // count files we actually OPEN (the expensive part we bound)
         let buf: Buffer;
         try {
-          if (statSync(full).size > MAX_FILE_BYTES) {
-            skipped++;
-            return;
-          }
           buf = readFileSync(full);
         } catch {
           skipped++;
@@ -896,7 +910,7 @@ export const findFiles: Tool<
           skipped++; // images would need OCR (~seconds each) — too slow to scan in bulk
           return;
         } else if (!isBinary(buf)) {
-          text = buf.toString("utf8");
+          text = buf.subarray(0, MAX_READ_BYTES).toString("utf8"); // cap like read_file — don't stringify 50MB
         }
         if (text == null) {
           skipped++;
@@ -910,6 +924,10 @@ export const findFiles: Tool<
       };
 
       const walk = async (dir: string, depth: number): Promise<void> => {
+        if (ctx.signal.aborted) {
+          truncated = true;
+          return;
+        }
         if (truncated || depth > MAX_DEPTH || matches.length >= MAX_MATCHES) return;
         let entries: import("node:fs").Dirent[];
         try {
