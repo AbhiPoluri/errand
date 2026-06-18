@@ -137,7 +137,7 @@ function attachPersistence(entry: RunEntry): void {
     // save that event", not crash the run. WebSink.emit swallows subscriber throws, but persist
     // explicitly so a write failure can never interrupt the live stream or mark a run wrong.
     try {
-      if (e.type !== "message.delta" && e.type !== "thinking.delta") store.appendEvent(entry.runId, e);
+      if (e.type !== "message.delta") store.appendEvent(entry.runId, e);
       if (e.type === "run.finished") {
         store.setStatus(entry.runId, "done");
         store.setChangeCount(entry.runId, e.changes.length);

@@ -81,7 +81,7 @@ export class AgentRunner {
     // streamed token serializes the stream behind disk latency. The final text is reconstructed
     // from message.completed, so per-delta logs carry no diagnostic value. Structural events
     // (tool calls, approvals, errors, usage) are still logged.
-    if (event.type !== "message.delta" && event.type !== "thinking.delta") this.o.logger.log("event", event);
+    if (event.type !== "message.delta") this.o.logger.log("event", event);
     await this.o.sink.emit(event);
   }
 

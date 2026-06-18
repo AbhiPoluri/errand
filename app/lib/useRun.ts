@@ -95,8 +95,6 @@ function apply(s: RunState, e: AgentEvent): RunState {
       return { ...updateLast(s, (t) => ({ ...t, reply: t.reply + e.text })), thinking: false };
     case "message.completed":
       return { ...updateLast(s, (t) => ({ ...t, reply: e.text })), thinking: false };
-    case "message.refusal":
-      return { ...updateLast(s, (t) => ({ ...t, reply: e.text })), thinking: false };
     case "tool.proposed": {
       const step: Step = { callId: e.callId, action: e.action, state: "running", reversibility: e.reversibility };
       return { ...updateLast(s, (t) => ({ ...t, steps: upsert(t.steps, step) })), thinking: false, statusLine: e.action };
