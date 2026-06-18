@@ -16,6 +16,7 @@ const item = {
 const EXAMPLES = [
   "Organize this folder by file type",
   "Find any duplicate files and round them up",
+  "Show me what changed in this folder recently",
   "Read my notes and summarize what they say",
 ];
 

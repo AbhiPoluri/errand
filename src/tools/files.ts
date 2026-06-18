@@ -724,11 +724,99 @@ export const findDuplicates: Tool<
   },
 };
 
+// Parse a human "within" hint into a cutoff timestamp (ms), or undefined for no limit.
+function withinCutoff(within?: string): number | undefined {
+  if (!within) return undefined;
+  const w = within.trim().toLowerCase();
+  if (w === "today") {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  }
+  if (w.includes("week")) return Date.now() - 7 * 86_400_000;
+  if (w.includes("month")) return Date.now() - 30 * 86_400_000;
+  const days = Number(w.replace(/[^0-9.]/g, ""));
+  return days > 0 ? Date.now() - days * 86_400_000 : undefined;
+}
+
+// ---- recent_changes (read-only) — "what did I just download / change?" Distinct from
+// folder_summary (size) and find_duplicates (identity); the natural precursor to a cleanup. ----
+export const recentChanges: Tool<
+  { dir?: string; within?: string },
+  { dir: string; files: { path: string; size: number; modifiedAt: number }[]; truncated: boolean }
+> = {
+  name: "recent_changes",
+  modelDescription:
+    "List the files changed most recently in a folder (newest first), looking through sub-folders too. Read-only. Optionally limit to 'today', 'this week', or a number of days.",
+  jsonSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      dir: { type: "string", description: "Folder to look in (default: the working folder)." },
+      within: { type: "string", description: "Optional time window: 'today', 'this week', or a number of days." },
+    },
+  },
+  argsSchema: z.object({ dir: z.string().optional(), within: z.string().optional() }),
+  gated: false,
+  describe: (a) => ({ action: `Looking at what changed recently in ${a.dir ? name(a.dir) : "the folder"}`, reversibility: "reversible" }),
+  summarize: (r) =>
+    r.ok ? `Found ${r.data?.files?.length ?? 0} recently-changed file(s).` : (r.summary ?? "I couldn't check recent changes."),
+  run: async (a, ctx) => {
+    try {
+      const root = resolveWithin(ctx.roots, a.dir ?? ".");
+      assertRealWithin(ctx.roots, root);
+      const MAX_NODES = Number(process.env.ERRAND_MAX_NODES) || 20_000;
+      const MAX_DEPTH = 8;
+      const TOP = 20;
+      let nodes = 0;
+      let truncated = false;
+      const all: { path: string; size: number; modifiedAt: number }[] = [];
+      const walk = (dir: string, depth: number): void => {
+        if (truncated || depth > MAX_DEPTH) return;
+        let entries: import("node:fs").Dirent[];
+        try {
+          entries = readdirSync(dir, { withFileTypes: true });
+        } catch {
+          return;
+        }
+        for (const d of entries) {
+          if (d.isDirectory() && d.name === ".errand-review") continue;
+          if (nodes >= MAX_NODES) {
+            truncated = true;
+            return;
+          }
+          nodes++;
+          const full = join(dir, d.name);
+          if (d.isDirectory()) walk(full, depth + 1);
+          else if (d.isFile()) {
+            try {
+              const st = statSync(full);
+              all.push({ path: full, size: st.size, modifiedAt: st.mtimeMs });
+            } catch {
+              /* unreadable — skip */
+            }
+          }
+        }
+      };
+      walk(root, 0);
+      const cutoff = withinCutoff(a.within);
+      const files = all
+        .filter((f) => cutoff === undefined || f.modifiedAt >= cutoff)
+        .sort((x, y) => y.modifiedAt - x.modifiedAt)
+        .slice(0, TOP);
+      return { ok: true, data: { dir: root, files, truncated } };
+    } catch (e) {
+      return fail(e);
+    }
+  },
+};
+
 export const fileTools = [
   listFiles,
   readFile,
   folderSummary,
   findDuplicates,
+  recentChanges,
   makeFolder,
   writeFile,
   moveFile,

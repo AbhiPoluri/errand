@@ -10,12 +10,13 @@ import {
   existsSync,
   rmSync,
   readdirSync,
+  utimesSync,
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Journal } from "./journal.ts";
 import { Registry, type ToolContext } from "./tools/index.ts";
-import { fileTools, renameFile, moveFile, folderSummary, findDuplicates, deleteFile } from "./tools/files.ts";
+import { fileTools, renameFile, moveFile, folderSummary, findDuplicates, recentChanges, deleteFile } from "./tools/files.ts";
 
 let failures = 0;
 const check = (name: string, cond: boolean, detail = "") => {
@@ -172,6 +173,31 @@ async function testTruncationHonesty() {
   rmSync(root, { recursive: true, force: true });
 }
 
+async function testRecentChanges() {
+  console.log("\n== recent_changes (r3 rank 12) ==");
+  const root = tmp("errand-recent-");
+  writeFileSync(join(root, "new.txt"), "new");
+  writeFileSync(join(root, "old.txt"), "old");
+  mkdirSync(join(root, ".errand-review"), { recursive: true });
+  writeFileSync(join(root, ".errand-review", "parked.txt"), "x");
+  const longAgo = Date.now() / 1000 - 30 * 86_400; // 30 days ago, in seconds
+  utimesSync(join(root, "old.txt"), longAgo, longAgo);
+  const j = new Journal();
+
+  const all = await recentChanges.run({}, ctxFor(root, j));
+  check("scan returned ok", all.ok);
+  const files = all.data?.files ?? [];
+  check("newest file sorts first", !!files[0]?.path.endsWith("new.txt"), files[0]?.path);
+  check(".errand-review is excluded", !files.some((f) => f.path.includes(".errand-review")));
+  check("read-only: recorded no journal entry", j.list().length === 0);
+
+  const today = await recentChanges.run({ within: "today" }, ctxFor(root, new Journal()));
+  const todayFiles = today.data?.files ?? [];
+  check("'today' window drops the 30-day-old file", !todayFiles.some((f) => f.path.endsWith("old.txt")));
+  check("'today' window keeps the new file", todayFiles.some((f) => f.path.endsWith("new.txt")));
+  rmSync(root, { recursive: true, force: true });
+}
+
 function testRegistryHygiene() {
   console.log("\n== registry hygiene ==");
   const reg = new Registry();
@@ -190,6 +216,7 @@ async function main() {
   await testFolderSummary();
   await testFindDuplicates();
   await testTruncationHonesty();
+  await testRecentChanges();
   testRegistryHygiene();
   console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILED"}`);
   process.exit(failures === 0 ? 0 : 1);
