@@ -27,4 +27,6 @@ export const config = {
   appReferer: "https://github.com/local/agent-harness",
   // Sandbox root for file/shell tools (v2+). Everything destructive is confined here.
   workspaceRoot: process.env.WORKSPACE_ROOT ?? `${process.cwd()}/workspace`,
+  // Where saved skills (named, reusable SKILL.md procedures) live. App-managed, not a user folder.
+  skillsRoot: process.env.ERRAND_SKILLS ?? `${process.cwd()}/skills`,
 } as const;

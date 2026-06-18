@@ -30,6 +30,13 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
   const [caps, setCaps] = useState<
     { id: string; label: string; description: string; enabled: boolean; available: boolean; required: boolean }[]
   >([]);
+  const [mcpServers, setMcpServers] = useState<
+    { id: string; label: string; command: string; args: string[]; enabled: boolean; connected: boolean; toolCount: number; error?: string }[]
+  >([]);
+  const [newMcp, setNewMcp] = useState({ label: "", command: "", args: "" });
+  const [mcpBusy, setMcpBusy] = useState(false);
+  const [mcpErr, setMcpErr] = useState<string | null>(null);
+  const [skills, setSkills] = useState<{ name: string; description: string; whenToUse: string }[]>([]);
   const closeRef = useRef<HTMLButtonElement>(null);
 
   // Modal keyboard support: Escape closes it, and focus moves to the close button on open so
@@ -56,6 +63,14 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
     fetch("/api/capabilities")
       .then((r) => r.json())
       .then((d) => setCaps(d.packs ?? []))
+      .catch(() => {});
+    fetch("/api/mcp")
+      .then((r) => r.json())
+      .then((d) => setMcpServers(d.servers ?? []))
+      .catch(() => {});
+    fetch("/api/skills")
+      .then((r) => r.json())
+      .then((d) => setSkills(d.skills ?? []))
       .catch(() => {});
     fetch("/api/model")
       .then((r) => r.json())
@@ -112,6 +127,33 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
   const resetOllamaUrl = () => {
     setOllamaUrl("http://localhost:11434/v1");
     saveOllamaUrl("http://localhost:11434/v1");
+  };
+
+  // Connected tools (MCP): add / remove / toggle a server. Every change re-reads the live status.
+  const mcpAction = async (body: Record<string, unknown>) => {
+    setMcpBusy(true);
+    setMcpErr(null);
+    const res = await fetch("/api/mcp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).catch(() => null);
+    if (res && res.ok) {
+      const d = await res.json().catch(() => ({}));
+      setMcpServers(d.servers ?? []);
+    } else {
+      const d = res ? await res.json().catch(() => ({})) : {};
+      setMcpErr(d?.error ?? "That didn't work.");
+    }
+    setMcpBusy(false);
+  };
+  const addMcpServer = async () => {
+    const command = newMcp.command.trim();
+    if (!command) return;
+    // Args entered as a single line; split on whitespace (quote-free — keep it simple for v1).
+    const args = newMcp.args.trim() ? newMcp.args.trim().split(/\s+/) : [];
+    await mcpAction({ action: "add", label: newMcp.label.trim(), command, args });
+    setNewMcp({ label: "", command: "", args: "" });
   };
 
   // Switch where the agent runs (cloud OpenRouter or local Ollama). Keep the model compatible:
@@ -398,6 +440,111 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
                 </ul>
               </div>
             )}
+
+            {/* connected tools (MCP) — add external tool servers; each tool always asks before running */}
+            <div className="border-b border-stone-100 px-6 py-4">
+              <p className="text-sm font-medium text-stone-900">Connected tools (MCP)</p>
+              <p className="mt-0.5 text-[13px] leading-relaxed text-stone-500">
+                Plug in tool servers (MCP) to give Errand new abilities. External tools always ask before they run.
+              </p>
+              {mcpServers.length > 0 && (
+                <ul className="mt-3 space-y-2">
+                  {mcpServers.map((s) => (
+                    <li key={s.id} className="flex items-center justify-between gap-3 rounded-lg border border-stone-200 bg-stone-50/60 px-3 py-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-[13px] font-medium text-stone-800">{s.label}</p>
+                        <p className="truncate text-[11px] text-stone-500">
+                          {s.error ? (
+                            <span className="text-rose-500">{s.error}</span>
+                          ) : s.connected ? (
+                            <span className="text-emerald-600">connected · {s.toolCount} tool{s.toolCount === 1 ? "" : "s"}</span>
+                          ) : s.enabled ? (
+                            "connecting…"
+                          ) : (
+                            "off"
+                          )}
+                          <span className="ml-1 font-mono text-stone-400">{s.command} {s.args.join(" ")}</span>
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <button
+                          onClick={() => mcpAction({ action: "toggle", id: s.id, enabled: !s.enabled })}
+                          role="switch"
+                          aria-checked={s.enabled}
+                          aria-label={`${s.label} enabled`}
+                          disabled={mcpBusy}
+                          className={`relative h-5 w-9 shrink-0 rounded-full transition disabled:opacity-50 ${s.enabled ? "bg-accent-600" : "bg-stone-200"}`}
+                        >
+                          <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${s.enabled ? "left-[1.125rem]" : "left-0.5"}`} />
+                        </button>
+                        <button
+                          onClick={() => mcpAction({ action: "remove", id: s.id })}
+                          disabled={mcpBusy}
+                          aria-label={`Remove ${s.label}`}
+                          className="text-stone-400 transition hover:text-rose-500 disabled:opacity-50"
+                        >
+                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden>
+                            <path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m2 0v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6" />
+                          </svg>
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="mt-3 space-y-1.5">
+                <input
+                  value={newMcp.label}
+                  onChange={(e) => setNewMcp((m) => ({ ...m, label: e.target.value }))}
+                  placeholder="Name (e.g. My Files)"
+                  className="w-full rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-[12px] text-stone-700 outline-none transition focus:border-accent-600/50"
+                />
+                <div className="flex items-center gap-2">
+                  <input
+                    value={newMcp.command}
+                    onChange={(e) => setNewMcp((m) => ({ ...m, command: e.target.value }))}
+                    spellCheck={false}
+                    placeholder="command (e.g. npx)"
+                    className="min-w-0 flex-1 rounded-lg border border-stone-200 bg-white px-3 py-1.5 font-mono text-[12px] text-stone-700 outline-none transition focus:border-accent-600/50"
+                  />
+                  <input
+                    value={newMcp.args}
+                    onChange={(e) => setNewMcp((m) => ({ ...m, args: e.target.value }))}
+                    spellCheck={false}
+                    placeholder="args (e.g. -y @modelcontextprotocol/server-filesystem ~/Documents)"
+                    className="min-w-0 flex-[2] rounded-lg border border-stone-200 bg-white px-3 py-1.5 font-mono text-[12px] text-stone-700 outline-none transition focus:border-accent-600/50"
+                  />
+                  <button
+                    onClick={addMcpServer}
+                    disabled={mcpBusy || !newMcp.command.trim()}
+                    className="shrink-0 rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-[13px] font-medium text-stone-700 transition hover:border-stone-300 active:scale-[0.98] disabled:opacity-50"
+                  >
+                    Add
+                  </button>
+                </div>
+                {mcpErr && <p className="text-xs text-rose-500">{mcpErr}</p>}
+              </div>
+            </div>
+
+            {/* skills — saved, reusable procedures the agent can apply */}
+            <div className="border-b border-stone-100 px-6 py-4">
+              <p className="text-sm font-medium text-stone-900">Skills</p>
+              <p className="mt-0.5 text-[13px] leading-relaxed text-stone-500">
+                Saved how-tos Errand can follow for routine tasks. Ask Errand to “save that as a skill” to add one.
+              </p>
+              {skills.length > 0 ? (
+                <ul className="mt-3 space-y-2">
+                  {skills.map((s) => (
+                    <li key={s.name} className="rounded-lg border border-stone-200 bg-stone-50/60 px-3 py-2">
+                      <p className="text-[13px] font-medium text-stone-800">{s.name}</p>
+                      {s.description && <p className="text-[12px] leading-snug text-stone-500">{s.description}</p>}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-2 text-xs text-stone-400">No skills yet.</p>
+              )}
+            </div>
 
             {/* dreaming controls */}
             <div className="border-b border-stone-100 px-6 py-4">

@@ -16,6 +16,9 @@ import { WebSink } from "./webSink.ts";
 import * as store from "./store.ts";
 import { dream } from "./dream.ts";
 import { rebuildJournalFromStore } from "./journalRestore.ts";
+import { McpManager } from "./mcp/manager.ts";
+import { loadMcpServers } from "./mcp/config.ts";
+import { skillsSummary } from "./skills.ts";
 
 // Reflect after a task settles — only if dreaming is on, debounced so it doesn't run
 // after every turn. Fire-and-forget; failures are silent.
@@ -75,8 +78,26 @@ class WebGate implements ApprovalGate {
   }
 }
 
-const g = globalThis as unknown as { __errandRuns?: Map<string, RunEntry>; __errandReconciled?: boolean };
+const g = globalThis as unknown as {
+  __errandRuns?: Map<string, RunEntry>;
+  __errandReconciled?: boolean;
+  __errandMcp?: McpManager;
+  __errandMcpConfigured?: boolean;
+};
 const runs: Map<string, RunEntry> = (g.__errandRuns ??= new Map());
+
+// MCP manager singleton (persistent server connections, survives HMR). Configured once per process
+// from the saved server list; its tools are appended to every run's registry in buildRegistry().
+const mcpManager: McpManager = (g.__errandMcp ??= new McpManager());
+export function getMcpManager(): McpManager {
+  return mcpManager;
+}
+if (!g.__errandMcpConfigured) {
+  g.__errandMcpConfigured = true;
+  // Fire-and-forget: warm up connections to enabled servers at boot. A run that starts before a
+  // server finishes connecting simply won't see its tools yet (the next run will) — never blocks boot.
+  mcpManager.configure(loadMcpServers()).catch((e) => console.warn("[errand] MCP initial configure failed:", e));
+}
 
 // Once per process (NOT per HMR re-eval — the flag lives on globalThis): any run the DB still
 // calls 'working' is a zombie from a killed process. Reconcile it to an interrupted state so
@@ -99,7 +120,11 @@ function buildRegistry(): Registry {
   // The packs the user has enabled in Settings (defaults to the no-auth consumer surface
   // files/web/browser/memory; 'files' always forced on). General `bash` is the "power path"
   // (decision #4) and is intentionally NOT in any web pack yet.
-  return buildRegistryFor(enabledPacks(store.getSetting("packs")));
+  const reg = buildRegistryFor(enabledPacks(store.getSetting("packs")));
+  // Overlay tools from any connected MCP servers (each is gated + unknown-reversibility, so they
+  // flow through the same approval path). Connected servers only; a down server adds nothing.
+  for (const t of mcpManager.getTools()) reg.register(t);
+  return reg;
 }
 
 // The model new runs use: the user's saved choice (Settings → model switcher) or the env
@@ -157,7 +182,11 @@ async function buildSystemPrompt(query: string): Promise<string> {
   // reasons to — for common asks ("files from last week", "what's due this month", "as of today")
   // a cheap/local model anchors on its training cutoff and answers wrongly without ever calling it.
   const dateLine = `Today is ${new Date().toDateString()}. Use this for anything time-related; only check the exact clock time with a tool when you truly need it.`;
-  const base = `${dateLine}\n\n${SYSTEM_PROMPT}`;
+  let base = `${dateLine}\n\n${SYSTEM_PROMPT}`;
+  // Tell the model which saved skills exist (names + when-to-use) so it reaches for use_skill on a
+  // matching task instead of improvising. Just a listing — the body is loaded on demand by use_skill.
+  const skills = skillsSummary();
+  if (skills) base += `\n\nSaved skills you can apply (call use_skill with the name to load the steps):\n${skills}`;
   const mems = await store.relevantMemories(query);
   if (!mems) return base;
   return `${base}\n\nWhat you remember about this person (use it naturally; never recite it back):\n${mems}`;

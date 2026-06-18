@@ -32,11 +32,21 @@ export class McpClient {
   private pending = new Map<number, Pending>();
   private closed = false;
   private closeErr: Error | null = null;
+  private disconnectCb: ((err?: Error) => void) | null = null;
   serverInfo: { name?: string; version?: string } = {};
 
   constructor(private transport: McpTransport) {
     transport.onMessage((m) => this.onMessage(m));
     transport.onClose((err) => this.onClose(err));
+  }
+
+  // Notified when the server process dies (crash or clean exit) — the manager uses this to flip a
+  // connection to disconnected and drop its tools.
+  onDisconnect(cb: (err?: Error) => void): void {
+    this.disconnectCb = cb;
+  }
+  get isClosed(): boolean {
+    return this.closed;
   }
 
   static stdio(cfg: StdioServerConfig): McpClient {
@@ -62,6 +72,7 @@ export class McpClient {
       p.reject(this.closeErr);
     }
     this.pending.clear();
+    this.disconnectCb?.(err);
   }
 
   private request(method: string, params: unknown, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<any> {

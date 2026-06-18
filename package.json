@@ -28,6 +28,7 @@
     "endpoint:test": "tsx src/endpointTest.ts",
     "zip:test": "tsx src/zipTest.ts",
     "mcp:test": "tsx src/mcpTest.ts",
+    "skill:test": "tsx src/skillTest.ts",
     "cli": "tsx src/cli.ts",
     "web": "next dev -p 3200",
     "dev": "next dev -p 3200"

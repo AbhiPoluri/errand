@@ -4,9 +4,21 @@
 > `NIGHT-LOG.md` are the per-item log of the session summarized here. This block is the short
 > "where we are + what's next."
 
-## Where we are: merged to `main`, plus three follow-ups on top
+## Where we are: merged to `main`, plus several follow-ups on top
 **The overnight branch is MERGED into `main` (merge commit `9d23a24`); work continues on `main`
-directly.** Three things landed since, newest first (see PLAN §11 for detail):
+directly.** Newest first (see PLAN §11 for detail):
+- **MCP + Skills (the MCP/skills plan, fully shipped — `docs/MCP-SKILLS-ELECTRON-PLAN.md`).** Errand can
+  now (a) use **external MCP tool servers** — add one in Settings → "Connected tools (MCP)" and the agent
+  gains its tools (each gated + unknown-reversibility → always asks, never auto-approved/undone), and
+  (b) use **skills** — saved SKILL.md how-tos it lists/applies via `use_skill` and saves via `save_skill`
+  (skills pack on by default; bundled `tidy-downloads` example). `src/server/mcp/*` (stdio client +
+  manager + config), `app/api/{mcp,skills}`, `src/server/skills.ts` + `src/tools/skills.ts`. Live-verified
+  end-to-end: the real `@modelcontextprotocol/server-filesystem` added through the app → the agent called
+  its `read_text_file` (gated→approved→executed). 3-lens adversarial review → 8 findings, ALL fixed
+  (MCP connect-window process-leak race [serialized configure + hold-client-early + orphan check]; long-id
+  tool-name collision [hash-suffix truncation]; save_skill destructive undo [file-scoped inverse]; + 3
+  LOWs). New `mcp:test` + `skill:test`. Electron remains deferred (pair with the durability refactor).
+- Earlier three follow-ups:
 - **`create_zip`** — Errand can now PACKAGE files into a `.zip` (not just unpack). This is the first
   of the two deferred from-scratch binary writers, built the safe way: a `buildZip`/`crc32` writer
   beside the existing reader, verified three ways (round-trips through our own reader, passes the
@@ -55,16 +67,17 @@ MORNING-REPORT.md and are low/self-healing).
 shipped — see the top of this doc.) Reading is shipped + safe; the round-trip-through-the-reader test
 plan is ready to make the document writer safe when reviewed.
 
-**Suggested next (your call):** hosting-grade durability (resume mid-flight, multi-worker — a
-core-run-state refactor, too big to land unreviewed); or `save_as_document`, the remaining deferred
-OOXML writer (review before shipping — riskier than the zip writer was). (Gmail is OFF the table per
-the user. Branch merge ✅, Ollama-LAN ✅, and create_zip ✅ are done.)
+**Suggested next (your call):** the **Electron wrap** paired with the **hosting-grade durability**
+refactor (agent core → main process; resume mid-flight; the `SessionStore`/`RunRegistry` swap — see
+the MCP/skills plan doc §4); MCP follow-ups (HTTP/SSE transport, per-tool toggles, auto-restart-on-crash
+backoff); or `save_as_document`, the remaining deferred OOXML writer (review before shipping). (Gmail is
+OFF per the user. Branch merge ✅, Ollama-LAN ✅, create_zip ✅, MCP+Skills ✅ are done.)
 
 ## Resume / verify quickly
 - `npm run web` → http://localhost:3200. Extension must be loaded for browser tasks (green dot on Home).
 - Offline tests (all green): `npm run loop:test`, `web:test`, `fileops:test`, `journal:test`,
   `embed:test`, `store:test`, `websink:test`, `ext:test`, `bash:test`, `clickrisk:test`,
-  `restart:test`, `cap:test`, `endpoint:test`, `zip:test`. (`mem:test` needs the OpenRouter key; `doc:test`/`ocr:test` are slower.)
+  `restart:test`, `cap:test`, `endpoint:test`, `zip:test`, `mcp:test`, `skill:test`. (`mem:test` needs the OpenRouter key; `doc:test`/`ocr:test` are slower.)
 - ⚠️ Model/endpoint is switchable from the **header pill** AND Settings → Model (OpenRouter ↔ Ollama;
   Ollama can point at localhost OR another machine on the LAN via the "Ollama server" URL field, with
   detected models in a dropdown). It's currently on Ollama @ the Mac Studio — confirm the model/endpoint

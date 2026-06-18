@@ -6,6 +6,7 @@
 import { join } from "node:path";
 import { McpClient } from "./server/mcp/client.ts";
 import { mcpToolToErrandTool, mcpToolName } from "./server/mcp/pack.ts";
+import { McpManager } from "./server/mcp/manager.ts";
 import { Registry, type ToolContext } from "./tools/index.ts";
 import { Journal } from "./journal.ts";
 
@@ -80,6 +81,36 @@ async function main() {
   }
   check("connect() to a server that exits immediately fails cleanly", connectFailed);
   bad.close();
+
+  // --- M2: the manager reconciles connections to a config and exposes tools ---
+  const mgr = new McpManager();
+  await mgr.configure([{ id: "fake", label: "Fake MCP", command: process.execPath, args: [FAKE], enabled: true }]);
+  check("manager reports the server connected", mgr.status()[0]?.connected === true, JSON.stringify(mgr.status()[0]));
+  check("manager.getTools() exposes the 3 mapped tools", mgr.getTools().length === 3);
+  check("manager tools are gated", mgr.getTools().every((t) => t.gated === true));
+  // Toggling the server off removes its tools.
+  await mgr.configure([{ id: "fake", label: "Fake MCP", command: process.execPath, args: [FAKE], enabled: false }]);
+  check("disabled server contributes no tools", mgr.getTools().length === 0);
+  check("disabled server is gone from status", mgr.status().length === 0);
+  // A server that can't start yields an error status, never throws, never adds tools.
+  await mgr.configure([{ id: "broken", label: "Broken", command: process.execPath, args: ["-e", "process.exit(1)"], enabled: true }]);
+  check("broken server: error status, no tools, no throw", mgr.getTools().length === 0 && mgr.status()[0]?.connected === false && !!mgr.status()[0]?.error);
+  mgr.closeAll();
+
+  // --- review fix: long server ids don't collapse distinct tools to one truncated name ---
+  const longId = "my-super-long-filesystem-server-for-documents-and-photos";
+  const n1 = mcpToolName(longId, "read_file");
+  const n2 = mcpToolName(longId, "read_directory");
+  check("long-id tool names stay within 64 chars", n1.length <= 64 && n2.length <= 64, `${n1.length},${n2.length}`);
+  check("long-id distinct tools keep DISTINCT names (no silent overwrite)", n1 !== n2, `${n1} vs ${n2}`);
+
+  // --- review fix: overlapping configure() serializes (both settle, exactly one connected entry) ---
+  const mgr2 = new McpManager();
+  const cfgA = [{ id: "fake", label: "Fake MCP", command: process.execPath, args: [FAKE], enabled: true }];
+  const settled = await Promise.allSettled([mgr2.configure(cfgA), mgr2.configure(cfgA)]);
+  check("overlapping configure() both settle without throwing", settled.every((s) => s.status === "fulfilled"));
+  check("overlapping configure() leaves exactly one connected server", mgr2.status().filter((s) => s.connected).length === 1, JSON.stringify(mgr2.status()));
+  mgr2.closeAll();
 
   console.log(`\nRESULT: ${failures === 0 ? "ALL PASS" : failures + " FAILED"}`);
   if (failures) process.exitCode = 1;

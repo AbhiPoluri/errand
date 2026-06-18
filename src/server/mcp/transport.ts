@@ -3,6 +3,8 @@
 // transport (spawn a local server process); HTTP/SSE can implement the same McpTransport seam later.
 import { spawn, type ChildProcess } from "node:child_process";
 
+const MAX_LINE_BYTES = 8_000_000; // a single JSON-RPC line over ~8MB is a misbehaving server, not data
+
 export interface McpTransport {
   start(): Promise<void>;
   send(msg: unknown): void;
@@ -39,6 +41,14 @@ export class StdioTransport implements McpTransport {
     child.stdout!.setEncoding("utf8");
     child.stdout!.on("data", (chunk: string) => {
       this.buf += chunk;
+      // A single JSON-RPC message is one line; a server that streams megabytes with no newline would
+      // otherwise grow buf without bound. Treat an over-long unframed buffer as a protocol violation.
+      if (this.buf.length > MAX_LINE_BYTES) {
+        this.buf = "";
+        this.close();
+        this.closeCb?.(new Error("MCP server sent an over-long message (no newline)"));
+        return;
+      }
       let nl: number;
       while ((nl = this.buf.indexOf("\n")) >= 0) {
         const line = this.buf.slice(0, nl).trim();

@@ -10,6 +10,7 @@ import { filesPack } from "./files.ts";
 import { webPack } from "./web.ts";
 import { browserPack } from "./browser.ts";
 import { memoryPack } from "./memory.ts";
+import { skillsPack } from "./skills.ts";
 
 export type { Capability } from "./types.ts";
 
@@ -17,10 +18,10 @@ export type { Capability } from "./types.ts";
 const BASE_TOOLS: Tool<any>[] = [getDate];
 
 // Every known pack. Adding a domain = one new pack file + one entry here.
-export const CAPABILITIES: Capability[] = [filesPack, webPack, browserPack, memoryPack];
+export const CAPABILITIES: Capability[] = [filesPack, webPack, browserPack, memoryPack, skillsPack];
 
 // What the web app enables by default (the no-auth consumer surface).
-export const DEFAULT_PACKS = ["files", "web", "browser", "memory"] as const;
+export const DEFAULT_PACKS = ["files", "web", "browser", "memory", "skills"] as const;
 
 // A pack is available only if every env var it requires is set (no requiresEnv → always available).
 export function isAvailable(cap: Capability): boolean {
