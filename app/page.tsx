@@ -45,6 +45,13 @@ function relativeTime(ms: number): string {
   return `${Math.round(h / 24)} days ago`;
 }
 
+// Compact label for the header model pill when the current model isn't a named preset (a custom
+// OpenRouter id or an Ollama tag) — show the last path segment, trimmed.
+function shortModel(id: string): string {
+  const tail = id.includes("/") ? id.slice(id.lastIndexOf("/") + 1) : id;
+  return tail.length > 22 ? tail.slice(0, 21) + "…" : tail;
+}
+
 export default function Page() {
   const run = useRun();
   const [input, setInput] = useState("");
@@ -69,6 +76,9 @@ export default function Page() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
   const [recentQuery, setRecentQuery] = useState("");
+  const [model, setModel] = useState("");
+  const [modelPresets, setModelPresets] = useState<{ id: string; label: string }[]>([]);
+  const [endpoint, setEndpoint] = useState("openrouter");
   const [welcomeDismissed, setWelcomeDismissed] = useState(true); // default true to avoid an SSR flash; flipped in an effect
   const [homeLoaded, setHomeLoaded] = useState(false); // true once recent+suggestions have been fetched at least once
 
@@ -80,6 +90,37 @@ export default function Page() {
       /* localStorage unavailable — leave it hidden */
     }
   }, []);
+
+  // The model new tasks use — shown in the header pill. Refetched when we land on Home and after
+  // Settings closes, so the pill and the Settings panel always agree.
+  useEffect(() => {
+    if (run.state.phase !== "idle") return;
+    fetch("/api/model")
+      .then((r) => r.json())
+      .then((d) => {
+        setModel(d.current ?? "");
+        setModelPresets(d.presets ?? []);
+        setEndpoint(d.endpoint ?? "openrouter");
+      })
+      .catch(() => {});
+  }, [run.state.phase, memoryOpen]);
+
+  // Quick model switch from the header. Presets are OpenRouter ids, so if the current endpoint is
+  // local (Ollama), switch it to OpenRouter too so the pairing stays valid (mirrors Settings).
+  const chooseModel = async (id: string) => {
+    if (!id || id === model) return;
+    setModel(id);
+    const body: { model: string; endpoint?: string } = { model: id };
+    if (id.includes("/") && endpoint !== "openrouter") {
+      body.endpoint = "openrouter";
+      setEndpoint("openrouter");
+    }
+    await fetch("/api/model", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).catch(() => {});
+  };
   const [, setClock] = useState(0); // ticks while idle so relative timestamps stay fresh
 
   const idle = run.state.phase === "idle";
@@ -265,13 +306,33 @@ export default function Page() {
   return (
     <main className="mx-auto min-h-[100dvh] w-full max-w-[680px] px-6 py-7">
       <MemoryPanel open={memoryOpen} onClose={() => setMemoryOpen(false)} />
-      <div className="flex h-14 items-center justify-between">
+      <div className="flex h-14 items-center justify-between gap-3">
         <span className="text-[17px] font-semibold tracking-tight text-stone-900">Errand</span>
-        <button
-          aria-label="Memory & settings"
-          onClick={() => setMemoryOpen(true)}
-          className="text-stone-400 transition hover:text-stone-700 active:scale-95"
-        >
+        <div className="flex min-w-0 items-center gap-2">
+          {/* Model indicator + quick switcher — the closed pill shows the current model; opening it
+              switches the model new tasks use, no Settings trip. Full endpoint/custom control stays
+              in Settings. */}
+          {model && (
+            <select
+              value={modelPresets.some((p) => p.id === model) ? model : "__current"}
+              onChange={(e) => e.target.value !== "__current" && chooseModel(e.target.value)}
+              aria-label="Model for new tasks"
+              title={`Model: ${model}${endpoint !== "openrouter" ? " · local" : ""} — switch it here`}
+              className="max-w-[150px] cursor-pointer truncate rounded-full border border-stone-200/80 bg-white/70 px-3 py-1 text-[12px] font-medium text-stone-500 transition hover:border-stone-300 hover:text-stone-800 sm:max-w-[190px]"
+            >
+              {!modelPresets.some((p) => p.id === model) && <option value="__current">{shortModel(model)}</option>}
+              {modelPresets.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+          )}
+          <button
+            aria-label="Memory & settings"
+            onClick={() => setMemoryOpen(true)}
+            className="shrink-0 text-stone-400 transition hover:text-stone-700 active:scale-95"
+          >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
             <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.5" />
             <path
@@ -281,7 +342,8 @@ export default function Page() {
               strokeLinecap="round"
             />
           </svg>
-        </button>
+          </button>
+        </div>
       </div>
 
       <motion.div variants={container} initial="hidden" animate="show" className="mt-20">
