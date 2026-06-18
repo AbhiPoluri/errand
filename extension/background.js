@@ -83,15 +83,61 @@ function waitComplete(tabId, timeout = 20000) {
 }
 
 // --- functions injected INTO the page (must be self-contained, no outer references) ---
+// NOTE: readPage/clickIdx/typeIdx are injected into the page via chrome.scripting.executeScript({func}),
+// which serializes ONLY the named function's own body — module-level helpers are NOT carried along.
+// So each of these is fully SELF-CONTAINED (helpers inlined), even at the cost of a little duplication.
+
 function readPage() {
-  const sel = "a, button, input, textarea, select, [role=button], [role=link], [role=textbox]";
+  const CAP = 80;
+  // Broadened beyond button/link so SPA menus, tabs, switches and options (Outlook, Gmail) are reachable.
+  const SEL =
+    "a, button, input, textarea, select, [role=button], [role=link], [role=textbox], [role=menuitem], [role=menuitemcheckbox], [role=menuitemradio], [role=combobox], [role=switch], [role=checkbox], [role=radio], [role=tab], [role=option]";
+  const seen = new Set();
+  const isVisible = (el) => {
+    const rect = el.getBoundingClientRect();
+    if (!(rect.width > 0 && rect.height > 0)) return false;
+    const cs = getComputedStyle(el);
+    return cs.visibility !== "hidden" && cs.display !== "none";
+  };
+  // Collect interactive descendants of `root`, DESCENDING INTO SHADOW ROOTS (web-component UIs put
+  // their controls inside shadow DOM, which querySelectorAll can't reach). Bounded so a huge page can't stall.
+  const collect = (root, out, budget) => {
+    let nodes;
+    try {
+      nodes = root.querySelectorAll("*");
+    } catch {
+      return;
+    }
+    for (const el of nodes) {
+      if (out.length >= budget) return;
+      if (el.shadowRoot) collect(el.shadowRoot, out, budget);
+      if (seen.has(el)) continue;
+      if (el.matches && el.matches(SEL) && isVisible(el)) {
+        seen.add(el);
+        out.push(el);
+      }
+    }
+  };
+  // 1) Controls inside an OPEN overlay (dialog/menu/flyout/listbox) go FIRST — so when a click opens
+  //    the Settings panel or a rule dialog, its controls lead the list instead of being pushed past
+  //    the cap by the persistent toolbar/nav. (This is what made menu navigation loop forever.)
+  const overlays = [];
+  try {
+    for (const o of document.querySelectorAll(
+      '[role=dialog], [aria-modal="true"], [role=menu], [role=listbox], [role=menubar], [role=tablist]',
+    )) {
+      if (isVisible(o)) collect(o, overlays, CAP);
+    }
+  } catch {}
+  // 2) Then the rest of the page (shadow-pierced, deduped against the overlays via `seen`).
+  const rest = [];
+  collect(document, rest, 240);
+  const ordered = overlays.concat(rest);
+
   const elements = [];
   let idx = 0;
-  for (const el of Array.from(document.querySelectorAll(sel))) {
-    if (elements.length >= 60) break;
-    const rect = el.getBoundingClientRect();
-    const visible = rect.width > 0 && rect.height > 0 && getComputedStyle(el).visibility !== "hidden";
-    if (!visible) continue;
+  for (const el of ordered) {
+    if (idx >= CAP) break;
     el.setAttribute("data-errand-idx", String(idx));
     const tag = el.tagName.toLowerCase();
     const label = (
@@ -99,6 +145,7 @@ function readPage() {
       el.innerText ||
       el.getAttribute("placeholder") ||
       el.value ||
+      el.getAttribute("title") ||
       el.getAttribute("name") ||
       ""
     )
@@ -110,8 +157,30 @@ function readPage() {
   }
   return { title: document.title, text: (document.body?.innerText || "").slice(0, 4000), elements };
 }
+
 function clickIdx(i) {
-  const el = document.querySelector('[data-errand-idx="' + i + '"]');
+  // Inlined deep finder (executeScript injects only this function's body).
+  const find = (root) => {
+    let d = null;
+    try {
+      d = root.querySelector('[data-errand-idx="' + i + '"]');
+    } catch {}
+    if (d) return d;
+    let nodes;
+    try {
+      nodes = root.querySelectorAll("*");
+    } catch {
+      return null;
+    }
+    for (const el of nodes) {
+      if (el.shadowRoot) {
+        const f = find(el.shadowRoot);
+        if (f) return f;
+      }
+    }
+    return null;
+  };
+  const el = find(document);
   if (!el) return { ok: false, error: "no such element" };
   el.scrollIntoView({ block: "center" }); // reveal off-screen targets before clicking
   el.click();
@@ -126,7 +195,27 @@ function scrollPage(to, amount) {
   return { ok: true, atBottom: window.scrollY + window.innerHeight >= document.body.scrollHeight - 4 };
 }
 function typeIdx(i, text) {
-  const el = document.querySelector('[data-errand-idx="' + i + '"]');
+  const find = (root) => {
+    let d = null;
+    try {
+      d = root.querySelector('[data-errand-idx="' + i + '"]');
+    } catch {}
+    if (d) return d;
+    let nodes;
+    try {
+      nodes = root.querySelectorAll("*");
+    } catch {
+      return null;
+    }
+    for (const el of nodes) {
+      if (el.shadowRoot) {
+        const f = find(el.shadowRoot);
+        if (f) return f;
+      }
+    }
+    return null;
+  };
+  const el = find(document);
   if (!el) return { ok: false, error: "no such element" };
   el.focus();
   el.value = text;
@@ -168,7 +257,7 @@ async function run(cmd) {
       if (r.frameId === 0 && r.result.title) title = r.result.title;
       if (r.result.text) text += r.result.text + "\n";
       for (const el of r.result.elements || []) {
-        if (elements.length >= 60) break;
+        if (elements.length >= 80) break;
         map.push({ frameId: r.frameId, localIdx: el.index });
         elements.push({ index: elements.length, kind: el.kind, label: el.label });
       }
