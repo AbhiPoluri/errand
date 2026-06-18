@@ -3,7 +3,7 @@
 // accepted; presets are the easy path. The OpenRouter API key never leaves the server.
 import { NextRequest, NextResponse } from "next/server";
 import { config } from "../../../src/config.ts";
-import { MODEL_PRESETS, ENDPOINTS } from "../../../src/models.ts";
+import { MODEL_PRESETS, ENDPOINTS, listOllamaModels } from "../../../src/models.ts";
 import { getSetting, setSetting } from "../../../src/server/store.ts";
 
 export const runtime = "nodejs";
@@ -16,6 +16,7 @@ export async function GET() {
     presets: MODEL_PRESETS,
     endpoint: getSetting("endpoint", "openrouter"),
     endpoints: ENDPOINTS.map((e) => ({ key: e.key, label: e.label, note: e.note })),
+    ollamaModels: await listOllamaModels(), // installed local models (fail-soft [] if Ollama is down)
   });
 }
 

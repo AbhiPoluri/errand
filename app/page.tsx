@@ -79,6 +79,7 @@ export default function Page() {
   const [model, setModel] = useState("");
   const [modelPresets, setModelPresets] = useState<{ id: string; label: string }[]>([]);
   const [endpoint, setEndpoint] = useState("openrouter");
+  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [welcomeDismissed, setWelcomeDismissed] = useState(true); // default true to avoid an SSR flash; flipped in an effect
   const [homeLoaded, setHomeLoaded] = useState(false); // true once recent+suggestions have been fetched at least once
 
@@ -101,24 +102,23 @@ export default function Page() {
         setModel(d.current ?? "");
         setModelPresets(d.presets ?? []);
         setEndpoint(d.endpoint ?? "openrouter");
+        setOllamaModels(d.ollamaModels ?? []);
       })
       .catch(() => {});
   }, [run.state.phase, memoryOpen]);
 
-  // Quick model switch from the header. Presets are OpenRouter ids, so if the current endpoint is
-  // local (Ollama), switch it to OpenRouter too so the pairing stays valid (mirrors Settings).
-  const chooseModel = async (id: string) => {
-    if (!id || id === model) return;
-    setModel(id);
-    const body: { model: string; endpoint?: string } = { model: id };
-    if (id.includes("/") && endpoint !== "openrouter") {
-      body.endpoint = "openrouter";
-      setEndpoint("openrouter");
-    }
+  // Quick switch of BOTH model and provider from the header in one pick. OpenRouter ids contain a
+  // "/", Ollama tags don't, so the endpoint is implied by the choice — keeping the model/provider
+  // pairing valid the same way Settings does. Finer Ollama-tag entry stays in Settings (free text).
+  const choose = async (modelId: string) => {
+    if (!modelId || modelId === model) return;
+    const nextEndpoint = modelId.includes("/") ? "openrouter" : "ollama";
+    setModel(modelId);
+    setEndpoint(nextEndpoint);
     await fetch("/api/model", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ endpoint: nextEndpoint, model: modelId }),
     }).catch(() => {});
   };
   const [, setClock] = useState(0); // ticks while idle so relative timestamps stay fresh
@@ -303,6 +303,17 @@ export default function Page() {
     setUploadErr(null);
   };
 
+  // Local (Ollama) quick-picks for the header: the models actually installed on this machine
+  // (detected via /api/tags), plus the current local tag, falling back to the documented default
+  // when Ollama isn't running or has nothing installed.
+  const ollamaTags = Array.from(
+    new Set([
+      ...(endpoint === "ollama" && model && !model.includes("/") ? [model] : []),
+      ...ollamaModels,
+      ...(ollamaModels.length ? [] : ["llama3.2:3b"]),
+    ]),
+  );
+
   return (
     <main className="mx-auto min-h-[100dvh] w-full max-w-[680px] px-6 py-7">
       <MemoryPanel open={memoryOpen} onClose={() => setMemoryOpen(false)} />
@@ -314,18 +325,29 @@ export default function Page() {
               in Settings. */}
           {model && (
             <select
-              value={modelPresets.some((p) => p.id === model) ? model : "__current"}
-              onChange={(e) => e.target.value !== "__current" && chooseModel(e.target.value)}
-              aria-label="Model for new tasks"
-              title={`Model: ${model}${endpoint !== "openrouter" ? " · local" : ""} — switch it here`}
-              className="max-w-[150px] cursor-pointer truncate rounded-full border border-stone-200/80 bg-white/70 px-3 py-1 text-[12px] font-medium text-stone-500 transition hover:border-stone-300 hover:text-stone-800 sm:max-w-[190px]"
+              value={model}
+              onChange={(e) => choose(e.target.value)}
+              aria-label="Model and provider for new tasks"
+              title={`${endpoint === "ollama" ? "Running locally (Ollama)" : "Running on OpenRouter (cloud)"} — switch model or provider here`}
+              className="max-w-[150px] cursor-pointer truncate rounded-full border border-stone-200/80 bg-white/70 px-3 py-1 text-[12px] font-medium text-stone-500 transition hover:border-stone-300 hover:text-stone-800 sm:max-w-[200px]"
             >
-              {!modelPresets.some((p) => p.id === model) && <option value="__current">{shortModel(model)}</option>}
-              {modelPresets.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.label}
-                </option>
-              ))}
+              <optgroup label="OpenRouter (cloud)">
+                {modelPresets.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+                {model.includes("/") && !modelPresets.some((p) => p.id === model) && (
+                  <option value={model}>{shortModel(model)}</option>
+                )}
+              </optgroup>
+              <optgroup label="Ollama (local)">
+                {ollamaTags.map((t) => (
+                  <option key={t} value={t}>
+                    {t} (local)
+                  </option>
+                ))}
+              </optgroup>
             </select>
           )}
           <button
