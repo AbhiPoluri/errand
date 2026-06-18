@@ -362,7 +362,12 @@ export const deleteFile: Tool<{ path: string }> = {
       if (!exists(abs)) return { ok: false, error: "missing", summary: "I couldn't find that to remove." };
       const reviewDir = join(ctx.workspaceRoot, ".errand-review", ctx.runId);
       mkdirSync(reviewDir, { recursive: true });
-      const dest = join(reviewDir, name(abs));
+      // Disambiguate by basename: deleting two files that share a name (a/notes.txt,
+      // b/notes.txt) must NOT have the second renameSync clobber the first parked copy —
+      // that would lose the first file's bytes and make its undo restore the wrong content.
+      const base = join(reviewDir, name(abs));
+      let dest = base;
+      for (let n = 1; exists(dest); n++) dest = `${base}.${n}`;
       renameSync(abs, dest);
       ctx.journal.record({
         op: "delete",
@@ -377,4 +382,203 @@ export const deleteFile: Tool<{ path: string }> = {
   },
 };
 
-export const fileTools = [listFiles, readFile, makeFolder, writeFile, moveFile, copyFile, deleteFile];
+// ---- rename_file (gated, reversible) — rename in place within the same folder ----
+// Distinct from move_file: non-technical users say "rename", and a bare-basename rename can't
+// relocate or escape scope, so it reads honestly in the timeline ("Rename X to Y", not "Move").
+export const renameFile: Tool<{ path: string; newName: string }> = {
+  name: "rename_file",
+  modelDescription:
+    "Rename a file or folder in place (it stays in the same folder). Give just the new name, not a path.",
+  jsonSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["path", "newName"],
+    properties: {
+      path: { type: "string", description: "The file or folder to rename." },
+      newName: { type: "string", description: "The new name only — no slashes, no folders." },
+    },
+  },
+  argsSchema: z.object({
+    path: z.string().min(1),
+    // A bare basename: no path separators, no parent traversal. Keeps the op in-place and in-scope.
+    newName: z
+      .string()
+      .min(1)
+      .refine((n) => !n.includes("/") && !n.includes("\\") && n !== ".." && !n.includes(".."), {
+        message: "must be a plain name, not a path",
+      }),
+  }),
+  gated: true,
+  describe: (a) => ({
+    action: `Rename ${name(a.path)} to ${a.newName}`,
+    items: [name(a.path)],
+    consequences: "You can undo this.",
+    reversibility: "reversible",
+  }),
+  summarize: (r) => (r.ok ? `Renamed to ${name((r.data as any)?.to ?? "")}.` : (r.summary ?? "I couldn't rename that.")),
+  run: async (a, ctx) => {
+    try {
+      const from = resolveWithin(ctx.roots, a.path);
+      assertRealWithin(ctx.roots, from);
+      if (!exists(from)) return { ok: false, error: "missing", summary: "I couldn't find that to rename." };
+      const to = join(dirname(from), a.newName);
+      resolveWithin(ctx.roots, to); // re-confirm the new name still lands inside an allowed root
+      if (exists(to)) return { ok: false, error: "collision", summary: "Something with that name is already there, so I left it alone." };
+      renameSync(from, to);
+      ctx.journal.record({
+        op: "move",
+        description: `Renamed ${name(from)} to ${a.newName}`,
+        reversibility: "reversible",
+        inverse: async () => renameSync(to, from),
+      });
+      return { ok: true, data: { from, to } };
+    } catch (e) {
+      return fail(e);
+    }
+  },
+};
+
+// ---- folder_summary (read-only) — bounded recursive disk-usage so "what's taking up
+// space?" / "free up room" works (list_files only sees one level). Strictly read-only. ----
+function humanBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
+}
+
+export const folderSummary: Tool<{ dir?: string }> = {
+  name: "folder_summary",
+  modelDescription:
+    "Summarize how much space a folder uses, recursively: total size, the biggest files, the biggest sub-folders, and a breakdown by file type. Read-only. Use this for 'what's taking up space' or 'help me free up room'.",
+  jsonSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: { dir: { type: "string", description: "Folder to summarize (default: the working folder)." } },
+  },
+  argsSchema: z.object({ dir: z.string().optional() }),
+  gated: false,
+  describe: (a) => ({ action: `Sizing up ${a.dir ? name(a.dir) : "the folder"}`, reversibility: "reversible" }),
+  summarize: (r) => {
+    if (!r.ok) return r.summary ?? "I couldn't size up that folder.";
+    const d = r.data as any;
+    const big = d?.largestFiles?.[0];
+    const tail = big ? `, biggest is ${name(big.path)} (${humanBytes(big.size)})` : "";
+    return `Looked through ${name(d?.dir ?? "the folder")} — ${d?.totalFiles ?? 0} file(s), ${humanBytes(d?.totalBytes ?? 0)}${tail}.`;
+  },
+  run: async (a, ctx) => {
+    try {
+      const root = resolveWithin(ctx.roots, a.dir ?? ".");
+      assertRealWithin(ctx.roots, root);
+      const MAX_NODES = 20_000; // walk budget — stop and flag `truncated` rather than hang
+      const MAX_DEPTH = 8;
+      const TOP = 5;
+      let nodes = 0;
+      let totalBytes = 0;
+      let totalFiles = 0;
+      let truncated = false;
+      const byExt = new Map<string, { bytes: number; count: number }>();
+      const largest: { path: string; size: number }[] = [];
+
+      const tallyFile = (full: string, fname: string): number => {
+        let size = 0;
+        try {
+          size = statSync(full).size;
+        } catch {
+          return 0; // unreadable — skip
+        }
+        totalFiles++;
+        totalBytes += size;
+        const dot = fname.lastIndexOf(".");
+        const ext = dot > 0 ? fname.slice(dot).toLowerCase() : "(no extension)";
+        const e = byExt.get(ext) ?? { bytes: 0, count: 0 };
+        e.bytes += size;
+        e.count++;
+        byExt.set(ext, e);
+        largest.push({ path: full, size });
+        return size;
+      };
+
+      // Returns total bytes under `dir`. Bounded by node budget + depth.
+      const walk = (dir: string, depth: number): number => {
+        if (truncated || depth > MAX_DEPTH) return 0;
+        let entries: import("node:fs").Dirent[];
+        try {
+          entries = readdirSync(dir, { withFileTypes: true });
+        } catch {
+          return 0; // unreadable folder — skip
+        }
+        let bytes = 0;
+        for (const d of entries) {
+          if (nodes >= MAX_NODES) {
+            truncated = true;
+            break;
+          }
+          nodes++;
+          const full = join(dir, d.name);
+          if (d.isDirectory()) bytes += walk(full, depth + 1);
+          else if (d.isFile()) bytes += tallyFile(full, d.name);
+        }
+        return bytes;
+      };
+
+      // Top level: track each immediate sub-folder's recursive size separately.
+      let top: import("node:fs").Dirent[];
+      try {
+        top = readdirSync(root, { withFileTypes: true });
+      } catch {
+        return { ok: false, error: "missing", summary: "I couldn't open that folder." };
+      }
+      const subfolders: { name: string; bytes: number }[] = [];
+      for (const d of top) {
+        if (nodes >= MAX_NODES) {
+          truncated = true;
+          break;
+        }
+        nodes++;
+        const full = join(root, d.name);
+        if (d.isDirectory()) subfolders.push({ name: d.name, bytes: walk(full, 1) });
+        else if (d.isFile()) tallyFile(full, d.name);
+      }
+
+      largest.sort((x, y) => y.size - x.size);
+      subfolders.sort((x, y) => y.bytes - x.bytes);
+      const byType = [...byExt.entries()]
+        .map(([ext, v]) => ({ ext, bytes: v.bytes, count: v.count }))
+        .sort((x, y) => y.bytes - x.bytes)
+        .slice(0, 10);
+
+      return {
+        ok: true,
+        data: {
+          dir: root,
+          totalFiles,
+          totalBytes,
+          truncated,
+          largestFiles: largest.slice(0, TOP),
+          largestSubfolders: subfolders.slice(0, TOP),
+          byType,
+        },
+      };
+    } catch (e) {
+      return fail(e);
+    }
+  },
+};
+
+export const fileTools = [
+  listFiles,
+  readFile,
+  folderSummary,
+  makeFolder,
+  writeFile,
+  moveFile,
+  renameFile,
+  copyFile,
+  deleteFile,
+];
