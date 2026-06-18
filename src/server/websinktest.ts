@@ -12,7 +12,7 @@ const check = (name: string, cond: boolean, detail = "") => {
 
 const ev = (seq: number, body: any): AgentEvent => ({ runId: "r", turnId: "t", seq, ts: 1, ...body }) as AgentEvent;
 
-function main() {
+async function main() {
   const sink = new WebSink();
   sink.emit(ev(0, { type: "run.started", title: "hi" }));
   sink.emit(ev(1, { type: "user.message", text: "go" }));
@@ -42,6 +42,21 @@ function main() {
   const sink2 = new WebSink();
   sink2.preload([ev(0, { type: "run.started", title: "x" }), ev(1, { type: "message.completed", text: "done" })]);
   check("preload sets buffer + maxSeq", sink2.events().length === 2 && sink2.lastSeq() === 1);
+
+  console.log("\n== onDone fires once on a terminal event ==");
+  const s3 = new WebSink();
+  let doneCount = 0;
+  s3.onDone(() => doneCount++);
+  s3.emit(ev(0, { type: "run.started", title: "x" }));
+  check("onDone not fired before a terminal event", doneCount === 0);
+  s3.emit(ev(1, { type: "run.finished", status: "completed", finalMessage: "", changes: [] }));
+  check("onDone fired on run.finished", doneCount === 1);
+  s3.emit(ev(2, { type: "run.error", kind: "transport", userMessage: "x", recoverable: true }));
+  check("onDone NOT fired again (cleared after first)", doneCount === 1);
+  let lateFired = false;
+  s3.onDone(() => (lateFired = true)); // registering on an already-done sink
+  await new Promise((r) => setTimeout(r, 0));
+  check("onDone on an already-done sink still fires (microtask)", lateFired);
 
   console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILED"}`);
   process.exit(failures === 0 ? 0 : 1);

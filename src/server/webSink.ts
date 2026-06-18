@@ -13,6 +13,7 @@ export class WebSink implements EventSink {
   private buffer: AgentEvent[] = []; // structural events — the durable transcript
   private recentDeltas: AgentEvent[] = []; // message.delta ring — live catch-up only
   private subs = new Set<(e: AgentEvent) => void>();
+  private onDoneCbs = new Set<() => void>();
   done = false;
   private maxSeq = -1;
 
@@ -35,6 +36,37 @@ export class WebSink implements EventSink {
         // a broken subscriber must never break the run
       }
     }
+    // After delivering a TERMINAL event, notify done-listeners so the SSE route can close cleanly
+    // (and stop pinning this run's buffer + interval) instead of lingering until a socket close.
+    if (e.type === "run.finished" || e.type === "run.error") {
+      this.done = true;
+      const cbs = [...this.onDoneCbs];
+      this.onDoneCbs.clear();
+      for (const fn of cbs) {
+        try {
+          fn();
+        } catch {
+          /* a broken done-listener must never break the run */
+        }
+      }
+    }
+  }
+
+  // Fire `fn` once when the run reaches a terminal state (or now, on a microtask, if it already
+  // has — so a reopened finished run still gets a clean teardown after replay). Returns unsubscribe.
+  onDone(fn: () => void): () => void {
+    if (this.done) {
+      queueMicrotask(() => {
+        try {
+          fn();
+        } catch {
+          /* ignore */
+        }
+      });
+      return () => {};
+    }
+    this.onDoneCbs.add(fn);
+    return () => this.onDoneCbs.delete(fn);
   }
 
   // Replay everything with seq >= fromSeq (structural + the recent delta window), in seq order,
