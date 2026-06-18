@@ -10,6 +10,7 @@ daily-life work: organize files (with Undo), research the web, read & explain do
 drive the user's **real Chrome** (via an extension) to do email/web tasks. Plus a
 **memory system** and a togglable **dreaming** (reflective consolidation) feature.
 
+- **Repo:** git, pushed to private GitHub `AbhiPoluri/errand` (`.env`/`errand.db`/caches gitignored).
 - Stack: **Next.js 14 (App Router) + Tailwind + Geist + framer-motion**, TypeScript.
 - Transport: **OpenRouter** via the `openai` SDK. Model is user-selectable; build/test
   default `deepseek/deepseek-v4-flash:nitro`.
@@ -30,7 +31,9 @@ no-task-limit (stuck-detection) → always-on composer + **interrupt/redirect** 
 editorial UI revamp** (paper/ink/clay/terracotta palette, `stone` neutrals, grain, diffusion
 shadows; no header logo; flat working dot) → **memory + dreaming** (see below) →
 **embedding-based memory retrieval** → **restart-hardening** (orphan reconciliation) →
-**v6 document reading — PDF/docx/xlsx/csv + image OCR** → **v7 capability-pack architecture** (all 2026-06-17; see DONE sections + PLAN §11).
+**v6 document reading — PDF/docx/xlsx/csv + image OCR** → **v7 capability-pack architecture** →
+**file attach + model switcher** → **streaming replies, copy button, delete-conversations, multi-file attach, git repo**
+(all 2026-06-17; see DONE sections + PLAN §11).
 
 ## Memory + Dreaming (the area of active work)
 - **Store** (`src/server/store.ts`): `memories` (now with an `embedding` TEXT column),
