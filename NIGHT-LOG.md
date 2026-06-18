@@ -106,8 +106,18 @@ deferred for lack of test coverage now that the suites exist). All 14 shipped + 
 12. ToolResult<D> generic — removed as-any casts in files/web summarizers. ✅ tsc + sweep
 13. Recently search + change-count badges. ✅ screenshot
 14. typed EmbedClient seam. ✅ embed:test
-New suite: `ext:test`. 31 commits total. Full sweep (loop/web/fileops/journal/embed/store/websink/
-ext/restart/cap) ALL PASS, tsc clean.
+New suite: `ext:test`. Full sweep (loop/web/fileops/journal/embed/store/websink/ext/restart/cap)
+ALL PASS, tsc clean.
+
+### Round-2 adversarial review (11-agent workflow) → 7 real findings, 6 fixed
+- **FIXED med** loop retry had no error classification → 4xx (bad model/key) retried pointlessly. Now only connection/408/409/429/5xx retry. ✅ loop:test (404 case)
+- **FIXED med** loop retry compounded with SDK maxRetries=2 (~9 requests) → set maxRetries:0. ✅
+- **FIXED low** backoff sleep ignored abort → Stop unresponsive; now abortable. ✅
+- **FIXED med** reconstructInverse dropped runtime field guards → corrupt manifest falsely undoable. Guards restored. ✅ restart:test
+- **FIXED low** dream 'added' over-count on concurrent remember() race → seed known from fresh read. ✅
+- **FIXED low** readCapped split multibyte char at cap → streaming TextDecoder. ✅ web:test
+- **LEFT low** SSE heartbeat leaks ≤10s on reconnect-supersede (self-heals on next tick).
+34 commits. Full sweep ALL PASS, tsc clean. See MORNING-REPORT.md.
 
 ## Parked / needs Abhiram
 _(none yet)_

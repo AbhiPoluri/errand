@@ -4,13 +4,16 @@ Good morning. I worked autonomously overnight on a dedicated branch. Everything 
 locally, **nothing was pushed and `main` is untouched** — review the diff and merge what you like.
 
 ## TL;DR
-- **Branch:** `overnight-2026-06-18` (off `main` @ f21ec17), **31 commits**, working tree clean.
+- **Branch:** `overnight-2026-06-18` (off `main` @ f21ec17), **34 commits**, working tree clean.
 - **Round 1:** shipped all 22 items from an 8-lens discovery pass (60 candidates → 22 ranked).
 - **Adversarial review** of round 1 (15-agent workflow): 9 real findings, **2 high — both fixed**,
   5 low fixed, 2 low consciously left (noted below).
 - **Round 2:** a second discovery pass → **14 more items** shipped (resilience timeouts/retries,
-  find_duplicates, capability toggles, perf indexes, type-safety, more UX). All verified.
-- `tsc` clean every commit; **10 offline test suites green**; **9 new test suites added**.
+  find_duplicates, capability toggles, perf indexes, type-safety, more UX).
+- **Adversarial review of round 2** (11-agent workflow): 7 real findings (all med/low), **6 fixed**
+  (error-classified retry, no double-retry, abortable backoff, manifest runtime guards, dream count,
+  readCapped multibyte), 1 low left (≤10s self-healing SSE heartbeat leak on reconnect).
+- **36 improvements total.** `tsc` clean every commit; **10 offline suites green**; **9 new suites**.
 - UI changes screenshot-verified at desktop + 375px.
 
 ## Review it
