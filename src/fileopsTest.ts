@@ -17,7 +17,7 @@ import { tmpdir, homedir } from "node:os";
 import { checkRoots, availableFolders } from "./server/folders.ts";
 import { Journal } from "./journal.ts";
 import { Registry, type ToolContext } from "./tools/index.ts";
-import { fileTools, renameFile, moveFile, folderSummary, findDuplicates, recentChanges, deleteFile } from "./tools/files.ts";
+import { fileTools, renameFile, moveFile, folderSummary, findDuplicates, recentChanges, findFiles, deleteFile } from "./tools/files.ts";
 import { extractZip } from "./tools/zip.ts";
 
 // Build a minimal STORED (method 0) zip by hand — enough for extract_zip's reader (it ignores CRC).
@@ -277,6 +277,35 @@ async function testExtractZip() {
   rmSync(root, { recursive: true, force: true });
 }
 
+async function testFindFiles() {
+  console.log("\n== find_files (r4 rank 3) ==");
+  const root = tmp("errand-find-");
+  mkdirSync(join(root, "notes"));
+  writeFileSync(join(root, "notes", "insurance.txt"), "Re: the insurance claim from June.");
+  writeFileSync(join(root, "shopping.md"), "milk, eggs, bread");
+  writeFileSync(join(root, "data.csv"), "name,amount\ninsurance,500");
+  writeFileSync(join(root, "photo.bin"), Buffer.from([0, 1, 2, 0, 255])); // binary → skipped in content
+  mkdirSync(join(root, ".errand-review"));
+  writeFileSync(join(root, ".errand-review", "parked.txt"), "insurance");
+  const j = new Journal();
+
+  const byName = await findFiles.run({ query: "insurance", mode: "name" }, ctxFor(root, j));
+  check("name mode finds insurance.txt by filename", (byName.data?.matches ?? []).some((m) => m.path.endsWith("insurance.txt") && m.via === "name"));
+  check("name mode does NOT match by content", !(byName.data?.matches ?? []).some((m) => m.path.endsWith("data.csv")));
+
+  const byContent = await findFiles.run({ query: "insurance", mode: "content" }, ctxFor(root, new Journal()));
+  const cpaths = (byContent.data?.matches ?? []).map((m) => m.path);
+  check("content mode finds the .txt by its contents", cpaths.some((p) => p.endsWith("insurance.txt")));
+  check("content mode finds the .csv by its contents", cpaths.some((p) => p.endsWith("data.csv")));
+  check("content matches carry a snippet", (byContent.data?.matches ?? []).every((m) => m.via !== "content" || typeof m.snippet === "string"));
+  check(".errand-review excluded from results", !cpaths.some((p) => p.includes(".errand-review")));
+  check("read-only: no journal entry", j.list().length === 0);
+
+  const none = await findFiles.run({ query: "zzz-nope-zzz" }, ctxFor(root, new Journal()));
+  check("no-match returns empty cleanly", none.ok === true && (none.data?.matches ?? []).length === 0);
+  rmSync(root, { recursive: true, force: true });
+}
+
 function testFolderAllowlist() {
   console.log("\n== folder allow-list enforced server-side (r4 rank 1) ==");
   const offered = availableFolders()[0]?.path; // the safe workspace — always offered + exists
@@ -307,6 +336,7 @@ async function main() {
   await testTruncationHonesty();
   await testRecentChanges();
   await testExtractZip();
+  await testFindFiles();
   testFolderAllowlist();
   testRegistryHygiene();
   console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILED"}`);

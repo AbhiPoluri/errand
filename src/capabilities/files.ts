@@ -7,6 +7,6 @@ export const filesPack: Capability = {
   id: "files",
   label: "Files",
   description:
-    "Look through a folder; read text, PDF, and Word documents; find duplicates; unpack zips; and create, rename, move, copy, or delete files — every change is undoable.",
+    "Look through a folder; read text, PDF, and Word documents; search for a file by name or by what's inside it; find duplicates; unpack zips; and create, rename, move, copy, or delete files — every change is undoable.",
   tools: fileTools,
 };

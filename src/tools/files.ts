@@ -821,12 +821,137 @@ export const recentChanges: Tool<
   },
 };
 
+// ---- find_files (read-only) — locate a file by NAME or by what's WRITTEN INSIDE it. Content
+// search reuses read_file's extraction path (text/CSV/MD directly; PDF/docx/xlsx via
+// extractDocument), so "find the letter where I mentioned the insurance claim" works. ----
+export const findFiles: Tool<
+  { query: string; dir?: string; mode?: "name" | "content" | "both" },
+  { dir: string; matches: { path: string; via: "name" | "content"; snippet?: string }[]; truncated: boolean; skipped: number }
+> = {
+  name: "find_files",
+  modelDescription:
+    "Find files in a folder by their name OR by what's written inside them (text, CSV, Markdown, PDF, Word, Excel). Read-only — use it to LOCATE a file when you don't know exactly where it is; then read or act on it. Optional mode: 'name', 'content', or 'both' (default).",
+  jsonSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["query"],
+    properties: {
+      query: { type: "string", description: "What to look for — a word/phrase in the name or the contents." },
+      dir: { type: "string", description: "Folder to search (default: the working folder)." },
+      mode: { type: "string", enum: ["name", "content", "both"], description: "Where to look (default: both)." },
+    },
+  },
+  argsSchema: z.object({
+    query: z.string().min(1),
+    dir: z.string().optional(),
+    mode: z.enum(["name", "content", "both"]).optional(),
+  }),
+  gated: false,
+  describe: (a) => ({ action: `Searching ${a.dir ? name(a.dir) : "the folder"} for "${a.query.slice(0, 50)}"`, reversibility: "reversible" }),
+  summarize: (r) => {
+    if (!r.ok) return r.summary ?? "I couldn't search those files.";
+    const n = r.data?.matches?.length ?? 0;
+    const tail = r.data?.truncated ? " (the folder was too big to search all of it)" : "";
+    return n ? `Found ${n} matching file(s)${tail}.` : `No matching files found${tail}.`;
+  },
+  run: async (a, ctx) => {
+    try {
+      const root = resolveWithin(ctx.roots, a.dir ?? ".");
+      assertRealWithin(ctx.roots, root);
+      const mode = a.mode ?? "both";
+      const q = a.query.toLowerCase();
+      const MAX_NODES = Number(process.env.ERRAND_MAX_NODES) || 20_000;
+      const MAX_DEPTH = 8;
+      const MAX_MATCHES = 50;
+      const MAX_CONTENT_SCANS = 400; // bound how many files we OPEN+extract for content search
+      let nodes = 0;
+      let contentScans = 0;
+      let truncated = false;
+      let skipped = 0;
+      const matches: { path: string; via: "name" | "content"; snippet?: string }[] = [];
+
+      const scanContent = async (full: string): Promise<void> => {
+        if (contentScans >= MAX_CONTENT_SCANS) {
+          truncated = true;
+          return;
+        }
+        contentScans++;
+        let buf: Buffer;
+        try {
+          if (statSync(full).size > MAX_FILE_BYTES) {
+            skipped++;
+            return;
+          }
+          buf = readFileSync(full);
+        } catch {
+          skipped++;
+          return;
+        }
+        let text: string | null = null;
+        const kind = docKindFor(full, buf);
+        if (kind) {
+          const doc = await extractDocument(kind, buf);
+          text = doc?.text ?? null;
+        } else if (isImageFile(full, buf)) {
+          skipped++; // images would need OCR (~seconds each) — too slow to scan in bulk
+          return;
+        } else if (!isBinary(buf)) {
+          text = buf.toString("utf8");
+        }
+        if (text == null) {
+          skipped++;
+          return;
+        }
+        const idx = text.toLowerCase().indexOf(q);
+        if (idx >= 0) {
+          const snippet = text.slice(Math.max(0, idx - 60), idx + q.length + 60).replace(/\s+/g, " ").trim();
+          matches.push({ path: full, via: "content", snippet });
+        }
+      };
+
+      const walk = async (dir: string, depth: number): Promise<void> => {
+        if (truncated || depth > MAX_DEPTH || matches.length >= MAX_MATCHES) return;
+        let entries: import("node:fs").Dirent[];
+        try {
+          entries = readdirSync(dir, { withFileTypes: true });
+        } catch {
+          return;
+        }
+        for (const d of entries) {
+          if (matches.length >= MAX_MATCHES) return;
+          if (d.isDirectory() && d.name === ".errand-review") continue;
+          if (nodes >= MAX_NODES) {
+            truncated = true;
+            return;
+          }
+          nodes++;
+          const full = join(dir, d.name);
+          if (d.isDirectory()) {
+            await walk(full, depth + 1);
+          } else if (d.isFile()) {
+            if (mode !== "content" && d.name.toLowerCase().includes(q)) {
+              matches.push({ path: full, via: "name" });
+            } else if (mode !== "name") {
+              await scanContent(full);
+            }
+          }
+        }
+      };
+      await walk(root, 0);
+      return { ok: true, data: { dir: root, matches, truncated, skipped } };
+    } catch (e) {
+      return fail(e);
+    }
+  },
+};
+
 export const fileTools = [
   listFiles,
   readFile,
   folderSummary,
   findDuplicates,
   recentChanges,
+  findFiles,
   makeFolder,
   writeFile,
   moveFile,
