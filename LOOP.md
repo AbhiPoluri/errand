@@ -73,9 +73,6 @@ it under needs-attended/needs-user instead of the safe Backlog.
 _(Queued by the 2026-06-19 Discovery #2 pass — 4 parallel scouts (deep), each candidate triaged. Work
 top-down; re-run Discovery when this empties again.)_
 
-- [ ] **(med) Cover embedMany malformed-index remap** (`src/server/embed.ts:58-62`): embedtest covers the
-  valid-shuffled remap but not an out-of-range or missing `index` (positional fallback). Add embed:test
-  cases asserting other rows keep their correct positions. Additive.
 - [ ] **(low) Lock the zip MAX_ENTRIES boundary** (`src/tools/zip.ts:58`): an over-cap archive aborts the
   whole unpack + removes the dest (atomic, intentional) but is untested; the cap consts aren't exported,
   so this needs a small `export` to test cleanly. Lock current behavior in fileops:test. Lowest priority.
@@ -101,6 +98,10 @@ top-down; re-run Discovery when this empties again.)_
 
 ## Done log (newest first)
 
+- 2026-06-19 — Cover embedMany malformed-index remap (from Discovery #2). embed:test now locks an
+  out-of-range index (dropped by the slot guard, no throw/drift) and a missing index (positional `?? i`
+  fallback) — the order-preserving contract memory retrieval rests on. Additive. tsc clean; 27 suites
+  green. `a4ba61f`.
 - 2026-06-19 — Cover extractXlsx boolean/formula/error cell types (from Discovery #2). Added a buildZip
   xlsx fixture (t="b"→TRUE/FALSE, t="str" formula, t="e" #DIV/0!) asserted via extractDocument; these
   cellValue branches were unexercised. Additive (doc:test). tsc clean; 27 offline suites + doc green.
