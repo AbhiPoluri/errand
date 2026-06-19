@@ -10,7 +10,12 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // process.parentPort exists only when this server runs as an Electron utilityProcess (the desktop app).
-const parentPort = (process as unknown as { parentPort?: { postMessage(m: unknown): void } }).parentPort;
+type ParentPort = {
+  postMessage(m: unknown): void;
+  on(ev: "message", cb: (e: { data: unknown }) => void): void;
+  removeListener(ev: "message", cb: (e: { data: unknown }) => void): void;
+};
+const parentPort = (process as unknown as { parentPort?: ParentPort }).parentPort;
 
 export function GET() {
   return NextResponse.json({ configured: hasApiKey(), desktop: !!parentPort });
@@ -33,8 +38,35 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   }
-  // Hand the key to the main process (it owns safeStorage). It encrypts, persists, and restarts the
-  // core so the new key takes effect — the renderer never touches the encrypted bytes.
-  parentPort.postMessage({ type: "errand:set-key", key });
+  // Hand the key to the main process (it owns safeStorage). It encrypts, persists, replies with the
+  // outcome, and on success restarts the core so the new key takes effect — the renderer never touches
+  // the encrypted bytes. We AWAIT that reply so a real failure (e.g. no OS keychain → key not stored)
+  // is surfaced honestly, instead of the old fire-and-forget "ok" that lied when the save silently
+  // failed. A missing reply within the timeout means the success-path restart already tore down this
+  // process — which only happens AFTER the key was stored — so we treat a timeout as success.
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const stored = await new Promise<boolean>((resolve) => {
+    let timer: ReturnType<typeof setTimeout>;
+    const onMsg = (e: { data: unknown }) => {
+      const m = e?.data as { type?: string; id?: string; ok?: boolean } | undefined;
+      if (m && m.type === "errand:set-key:result" && m.id === id) {
+        clearTimeout(timer);
+        parentPort.removeListener("message", onMsg);
+        resolve(!!m.ok);
+      }
+    };
+    timer = setTimeout(() => {
+      parentPort.removeListener("message", onMsg);
+      resolve(true); // restart killed us before replying → the save had already succeeded
+    }, 2500);
+    parentPort.on("message", onMsg);
+    parentPort.postMessage({ type: "errand:set-key", id, key });
+  });
+  if (!stored) {
+    return NextResponse.json(
+      { ok: false, error: "Couldn’t store the key securely on this system (no OS keychain available)." },
+      { status: 500 },
+    );
+  }
   return NextResponse.json({ ok: true, restarting: true });
 }

@@ -162,11 +162,25 @@ export async function shutdown(): Promise<void> {
 function wireShutdown(): void {
   if (g.__errandShutdownWired) return;
   g.__errandShutdownWired = true;
-  // Best-effort cleanup on dev-server exit. We do NOT call process.exit — the host owns the exit; we
-  // only release our external resources so they don't orphan. (Electron wires app 'before-quit' to
-  // shutdown() for a guaranteed async window; signal-time async cleanup here is best-effort.)
+  // On a signal, release our external resources (MCP children + the Playwright Chrome context/profile
+  // lock). As an Electron UTILITY PROCESS we ALSO exit(0) once cleanup finishes, so the main process's
+  // before-quit — which kills us with SIGTERM and waits for our exit before quitting — completes
+  // promptly instead of having to force-kill after a timeout (which would skip the awaited
+  // context.close() that frees the profile lock). Under `next dev`/CLI the host owns the exit, so we
+  // only release resources best-effort and let the host terminate us (unchanged behavior).
+  const isElectronChild = !!(process as unknown as { parentPort?: unknown }).parentPort;
+  // Run cleanup AT MOST ONCE across all of SIGINT/SIGTERM/beforeExit, and have every handler await the
+  // SAME in-flight cleanup. shutdown() is idempotent (its own `shuttingDown` guard), but a second call
+  // returns an already-RESOLVED promise — so if we did `shutdown().finally(exit)` per event, a second
+  // signal/beforeExit firing while the first cleanup is still awaiting the browser context.close()
+  // would exit immediately and skip the disconnect() that frees the Chrome profile lock. Caching the
+  // promise makes the exit wait for the real cleanup to finish.
+  let shutdownP: Promise<void> | undefined;
   const onSignal = () => {
-    void shutdown();
+    shutdownP ??= shutdown();
+    // Electron utility process: exit once cleanup completes so the main process's before-quit (which
+    // waits for our exit) finishes promptly. Under `next dev`/CLI the host owns the exit (unchanged).
+    if (isElectronChild) void shutdownP.finally(() => process.exit(0));
   };
   process.once("SIGINT", onSignal);
   process.once("SIGTERM", onSignal);

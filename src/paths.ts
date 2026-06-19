@@ -45,8 +45,10 @@ export function ocrCacheRoot(): string {
 }
 
 // Persistent Chrome profiles for the agent's real-login browser. Defaults to the user's HOME (so the
-// profile survives where the user expects it), NOT dataRoot — but a host can repoint it (Electron
-// moves it under userData). The browser layer appends `.errand-<channel>` to this.
+// profile survives where the user expects it), NOT dataRoot — a host CAN repoint it via
+// ERRAND_BROWSER_PROFILES, but the current Electron host does NOT: profiles intentionally stay in HOME
+// (durable + writable, and they outlive an app reinstall). The browser layer appends
+// `.errand-<channel>` to this.
 export function browserProfileRoot(): string {
   return process.env.ERRAND_BROWSER_PROFILES ?? homedir();
 }
