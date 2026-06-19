@@ -1,87 +1,89 @@
-# Errand — Session Handoff (updated 2026-06-18, after the overnight merge + the Ollama-LAN feature)
+# Errand — Session Handoff (updated 2026-06-18, after the big browser + writers + MCP/skills session)
 
-> Read this first to resume. `PLAN.md` is the full living spec/changelog; `MORNING-REPORT.md` +
-> `NIGHT-LOG.md` are the per-item log of the session summarized here. This block is the short
-> "where we are + what's next."
+> Read this first to resume. `PLAN.md` §11 is the full dated changelog (every item below has an
+> entry there with the exact files + verification). This block is the short "where we are + what's next."
 
-## Where we are: merged to `main`, plus several follow-ups on top
-**The overnight branch is MERGED into `main` (merge commit `9d23a24`); work continues on `main`
-directly.** Newest first (see PLAN §11 for detail):
-- **MCP + Skills (the MCP/skills plan, fully shipped — `docs/MCP-SKILLS-ELECTRON-PLAN.md`).** Errand can
-  now (a) use **external MCP tool servers** — add one in Settings → "Connected tools (MCP)" and the agent
-  gains its tools (each gated + unknown-reversibility → always asks, never auto-approved/undone), and
-  (b) use **skills** — saved SKILL.md how-tos it lists/applies via `use_skill` and saves via `save_skill`
-  (skills pack on by default; bundled `tidy-downloads` example). `src/server/mcp/*` (stdio client +
-  manager + config), `app/api/{mcp,skills}`, `src/server/skills.ts` + `src/tools/skills.ts`. Live-verified
-  end-to-end: the real `@modelcontextprotocol/server-filesystem` added through the app → the agent called
-  its `read_text_file` (gated→approved→executed). 3-lens adversarial review → 8 findings, ALL fixed
-  (MCP connect-window process-leak race [serialized configure + hold-client-early + orphan check]; long-id
-  tool-name collision [hash-suffix truncation]; save_skill destructive undo [file-scoped inverse]; + 3
-  LOWs). New `mcp:test` + `skill:test`. Electron remains deferred (pair with the durability refactor).
-- Earlier three follow-ups:
-- **`create_zip`** — Errand can now PACKAGE files into a `.zip` (not just unpack). This is the first
-  of the two deferred from-scratch binary writers, built the safe way: a `buildZip`/`crc32` writer
-  beside the existing reader, verified three ways (round-trips through our own reader, passes the
-  **system `unzip -t`**, and a sandboxed tool test) + a live agent run on the Mac Studio. 3-lens
-  adversarial review → 4 findings, 3 fixed (HIGH: FIFO/device source hang/OOM; MED: symlink-output
-  escape; LOW: dup-path "(2)"); 1 LOW left (empty-dir residue on undo, matches the write-family). New
-  `npm run zip:test`. `save_as_document` (OOXML writer) is STILL deferred — higher risk, lower value.
-- **Settings icon** was a sun; now a gear (`app/page.tsx`).
-- **Configurable Ollama endpoint** (commit `401f3b6`) — Errand can run on Ollama on another machine on
-  your network (e.g. a Mac Studio at `http://192.168.86.237:11434/v1`), not just localhost: persisted
-  base URL for chat + model detection, a pre-flight reachability probe (unreachable host fails in
-  ~2.5s, not a ~120s hang), forgiving/path-preserving URL parsing, and a **dropdown of detected
-  models** in Settings with live "Connected — N models found" feedback + reset-to-localhost. 8
-  adversarial-review findings fixed; new `endpoint:test` (21 assertions).
+## Where we are
+**Everything is on `main`, committed AND pushed to GitHub `AbhiPoluri/errand` (HEAD `4675873`, clean
+tree).** The overnight branch was merged (`9d23a24`); all work since is on `main`. This session shipped
+~70 commits across four arcs — each item has a dated PLAN §11 entry with files + verification:
 
-⚠️ `errand.db` is currently set to **Ollama / qwen3.5:35b-a3b @ the Mac Studio** — switch back to
-OpenRouter in Settings → Model for cloud use.
+### 1. Browser automation — the big one (it now cracks Gmail)
+The session-long focus: making the agent reliably drive real sites. What it can do now, and WHY it works:
+- **Reader (`extension/background.js` `readPage`)** — the agent's perception. Fixes, in order they were
+  needed: overlay-first ordering (an open menu/dialog leads the element list, not buried under the
+  toolbar) → shadow-DOM piercing → `role=alertdialog` + a role-less fixed-overlay fallback → surfacing
+  Gmail's `[jsaction]` **div-buttons** (no ARIA role) as labelled leaves → **MODAL-ONLY**: when a real
+  modal (`aria-modal`/`alertdialog`/`role=dialog` w/ a control) is open, read ONLY it (the rest is inert
+  behind it — this stopped the agent clicking the page's own "Unsubscribe" LINK instead of the dialog's
+  BUTTON). 80-element cap, shadow-pierced click/type targeting.
+- **Settle before reading (`src/tools/browser.ts` `observe`)** — after a click, poll the page until it
+  stops changing (≤~2.5s) before snapshotting, so the agent reads the OPENED menu, not a mid-transition.
+- **TRUSTED input via CDP (`chrome.debugger`)** — THE fix for the hardest sites. Synthetic events are
+  `isTrusted:false` and Gmail/Google ignore them; the extension now drives click/key/hover through the
+  DevTools Protocol Input domain (trusted). Default-on **"Reliable clicks & keys"** toggle (Settings),
+  per-command `trusted` flag from `drive.ts` (`browserTrusted` setting), synthetic fallback for iframes /
+  attach-fail. Manifest gained `"debugger"` (v0.2.0).
+- **Keyboard + hover tools** — `browser_key` (Enter/Escape/Tab/Arrows; Enter also `form.requestSubmit()`
+  so searches submit even when keydown is intercepted) and `browser_hover`.
+- **"Eyes" / vision (optional)** — feed the page SCREENSHOT to a vision model after browser actions
+  (`session.pushUserImage`, latest-only prune). Default-on toggle, gated on `modelSupportsVision`.
+- **PROVEN end-to-end:** with DeepSeek, the agent unsubscribed from Indeed in real Gmail (the original
+  task), and passed clean Wikipedia-search + httpbin-form tests. Gmail is an outlier (jsaction buttons,
+  duplicate labels, nested modals); normal sites work easily.
 
-**What the merged overnight branch brought — 53 improvements across 4 autonomous discovery rounds, each adversarially reviewed
-(4 review passes, ~22 findings fixed incl. 2 high-sev I'd introduced), plus morning follow-ups:**
-- **Trust/correctness:** Undo survives restart (persisted journal manifest + new
-  `src/server/journalRestore.ts`); delete same-name collision fix; stuck-detection rewrite (counts
-  only real repetition); corrupt-DB-row guards; web_search snippet alignment; Zod-validated dreaming;
-  truncated-scan honesty in find_duplicates/folder_summary/recent_changes/find_files.
-- **Resilience/safety:** per-request timeouts + streamed bounded body on web tools; loop idle-stream
-  watchdog + bounded retries + 120s client timeout; run_command OOM cap; extension fails parked
-  commands on disconnect; SSE tears down on terminal; **server-side folder allow-list (a real
-  scope-escape fix — `checkRoots`)**; browser click-risk hardening (unlabeled buttons pause).
-- **New tools:** `rename_file`, `folder_summary`, `find_duplicates`, `recent_changes`, `find_files`
-  (name/content search), `extract_zip`; **capability on/off toggles** in Settings.
-- **UX:** first-run welcome card, export transcript, Recently search + change-count badges, Try-again
-  on errors, read-only "nothing changed" confirmation, safe-folder copy; **header model + provider
-  switcher with live Ollama model detection** (`/api/tags`); Settings-modal scroll fix.
-- **Agent guidance (`src/prompt.ts`):** date awareness, cite-the-source / don't-fabricate-on-failure,
-  scope-first on broad requests, prefer-undoable actions, end-of-task recap.
-- **Under the hood:** SQLite WAL + lower(text) dedup indexes; `OpManifest` + `ToolResult<D>` typing;
-  **12 new offline test suites**; tsc clean every commit.
+### 2. Binary writers — BOTH deferred writers now shipped + reviewed
+- **`create_zip`** — package files into a `.zip` (`buildZip`+`crc32` in `extract.ts`; tool in `zip.ts`).
+- **`save_as_document`** — WRITE `.docx`/`.xlsx` (`buildDocx`/`buildXlsx` reuse `buildZip`; tool in
+  `document.ts`). Verified by round-trip through our own readers + **macOS `textutil`** opens the docx +
+  `unzip -t`/`xmllint` validate the xlsx; a live agent run wrote a real Word doc.
+- Both got a 3-lens adversarial review; all confirmed findings fixed (zip: FIFO/device hang, symlink
+  escape; docx/xlsx: illegal-control-char corruption [the test missed it — readers are lenient], numeric
+  coercion of zip-codes/IDs, content size cap). New `zip:test` + `docwrite:test`. **Deferred-writer list
+  is now empty.**
 
-**Verified:** tsc clean per commit; full offline suite green (loop/web/fileops/journal/embed/store/
-websink/ext/bash/clickrisk/restart/cap); UI screenshot-verified (desktop + 375px); 4 adversarial
-reviews with all confirmed findings fixed or consciously left (the few "left" ones are noted in
-MORNING-REPORT.md and are low/self-healing).
+### 3. MCP + Skills (`docs/MCP-SKILLS-ELECTRON-PLAN.md`)
+- **MCP** — add an external tool server in Settings → "Connected tools (MCP)" and the agent gains its
+  tools (gated + unknown-reversibility → always asks). `src/server/mcp/*` (stdio client + manager +
+  config), `/api/mcp`. Live-verified against the real `@modelcontextprotocol/server-filesystem`.
+- **Skills** — saved `SKILL.md` how-tos via `list_skills`/`use_skill`/`save_skill` (pack on by default;
+  bundled `tidy-downloads`). `src/server/skills.ts` + `src/tools/skills.ts`, `/api/skills`.
+- 3-lens review → 8 findings ALL fixed (notably an MCP connect-window process-leak race). New `mcp:test`
+  + `skill:test`.
 
-**Deferred binary writers: BOTH now shipped + reviewed.** `create_zip` and `save_as_document`
-(.docx/.xlsx) were the two from-scratch binary writers held back for review; both have since been
-built, 3-lens adversarially reviewed (all findings fixed), and shipped with round-trip + real-app
-(`textutil`/`unzip`) verification. Nothing is left on the deferred-writer list.
+### 4. Models + misc
+- **Configurable Ollama endpoint** — run on Ollama on another machine on the LAN (Settings → Model
+  "Ollama server" URL + detected-models dropdown + reachability pre-flight). `endpoint:test`.
+- Dreaming "Ideas from Errand" forced to **English** (deepseek drifted to Chinese); sun→gear settings icon.
 
-**Suggested next (your call):** the **Electron wrap** paired with the **hosting-grade durability**
-refactor (agent core → main process; resume mid-flight; the `SessionStore`/`RunRegistry` swap — see
-the MCP/skills plan doc §4); MCP follow-ups (HTTP/SSE transport, per-tool toggles, auto-restart-on-crash
-backoff); or `save_as_document`, the remaining deferred OOXML writer (review before shipping). (Gmail is
-OFF per the user. Branch merge ✅, Ollama-LAN ✅, create_zip ✅, MCP+Skills ✅ are done.)
+⚠️ **Model is whatever you last picked.** This session bounced between Ollama/qwen, `nex-n2-pro:free`,
+and DeepSeek. **DeepSeek or Gemini for browser tasks** — free/weak models flail (re-search instead of
+clicking). Confirm in the header pill / Settings → Model before a real run.
+
+**Suggested next (your call):**
+- **Durability + Electron** — the standing big item: make runs RESUMABLE (the `SessionStore`/`RunRegistry`
+  swap; restart currently reconciles to "interrupted", doesn't resume mid-flight), then wrap as a desktop
+  app (agent core → Electron main process). See the MCP/skills plan doc §4. Turns it from a dev project
+  into a shippable product.
+- **Browser follow-ups** — Gmail email-row open reliability (the one Gmail step still finicky); a model
+  picker warning for weak/free models on hard tasks; MCP HTTP/SSE transport + per-tool toggles.
+- A polish/adversarial-review sweep over the session's changes.
 
 ## Resume / verify quickly
 - `npm run web` → http://localhost:3200. Extension must be loaded for browser tasks (green dot on Home).
+- ⚠️ **RELOAD THE EXTENSION before any browser test.** Every browser fix this session lives in
+  `extension/background.js`/`manifest.json`, and the manifest is now **v0.2.0 with the `debugger`
+  permission** for trusted input — so it needs chrome://extensions → Errand → reload **and accepting the
+  new permission** (if reload alone doesn't take, remove + re-add unpacked `~/agent-harness/extension`).
+  Trusted input shows a "Errand is debugging this browser" banner while a browser task runs (expected).
 - Offline tests (all green): `npm run loop:test`, `web:test`, `fileops:test`, `journal:test`,
-  `embed:test`, `store:test`, `websink:test`, `ext:test`, `bash:test`, `clickrisk:test`,
-  `restart:test`, `cap:test`, `endpoint:test`, `zip:test`, `mcp:test`, `skill:test`. (`mem:test` needs the OpenRouter key; `doc:test`/`ocr:test` are slower.)
-- ⚠️ Model/endpoint is switchable from the **header pill** AND Settings → Model (OpenRouter ↔ Ollama;
-  Ollama can point at localhost OR another machine on the LAN via the "Ollama server" URL field, with
-  detected models in a dropdown). It's currently on Ollama @ the Mac Studio — confirm the model/endpoint
-  shows what you want before a real run (switch to OpenRouter for cloud).
+  `embed:test`, `store:test`, `websink:test`, `ext:test`, `bash:test`, `clickrisk:test`, `restart:test`,
+  `cap:test`, `endpoint:test`, `zip:test`, `mcp:test`, `skill:test`, `docwrite:test`. (`mem:test` needs
+  the OpenRouter key; `doc:test`/`ocr:test` are slower.)
+- Model/endpoint switchable from the **header pill** AND Settings → Model (OpenRouter ↔ Ollama; Ollama
+  can point at localhost OR a LAN machine via the "Ollama server" URL + detected-models dropdown).
+  **Use DeepSeek/Gemini for browser tasks** (free/weak models flail). Settings also has **vision**
+  ("Let Errand see the screen") and **trusted input** ("Reliable clicks & keys") toggles, both default-on.
 
 ## What Errand is
 A from-scratch TypeScript AI agent harness with a calm consumer UI for **non-technical
@@ -92,8 +94,11 @@ drive the user's **real Chrome** (via an extension) to do email/web tasks. Plus 
 
 - **Repo:** git, pushed to private GitHub `AbhiPoluri/errand` (`.env`/`errand.db`/caches gitignored).
 - Stack: **Next.js 14 (App Router) + Tailwind + Geist + framer-motion**, TypeScript.
-- Transport: **OpenRouter** via the `openai` SDK. Model is user-selectable; build/test
-  default `deepseek/deepseek-v4-flash:nitro`.
+- Transport: the `openai` SDK pointed at **OpenRouter (cloud) OR Ollama (local / LAN)** — user-selectable
+  per run (Settings → Model). Build/test default `deepseek/deepseek-v4-flash:nitro`. Embeddings + dreaming
+  always use the OpenRouter singleton regardless of the chat-model choice.
+- Capabilities now: organize/read/**write** files (incl. `.docx`/`.xlsx`/`.zip`), web search/read,
+  drive real Chrome (trusted CDP input + optional vision), **MCP** tool servers, **skills**, memory + dreaming.
 - Persistence: **SQLite via Node 24 built-in `node:sqlite`** → `errand.db` (no native dep).
 - Run it: `npm run web` (port **3200**). CLI sink: `npm run cli`. Tests: `npm run v1:test` … `v3:test`, `npm run mem:test` (memory retrieval), `npm run restart:test` (orphan reconciliation), `npm run doc:test` (PDF/docx/xlsx/csv), `npm run ocr:test` (image OCR), `npm run cap:test` (capability packs).
 - The Chrome extension lives in `extension/` (load unpacked; it streams over `/api/ext/*`).
