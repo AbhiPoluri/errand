@@ -172,6 +172,28 @@ async function main(): Promise<void> {
   check("xlsx: empty shared-string cell stays empty (not shared[0])", !!ex && ex.text.includes("Alpha\t\tGamma") && !ex.text.includes("Alpha\tAlpha"));
   check("xlsx: huge column ref capped (no OOM, still extracts)", !!ex && ex.text.includes("Alpha"));
 
+  // Cell TYPES beyond shared-string/number: boolean (t="b") → TRUE/FALSE, formula result (t="str") →
+  // its cached value, error (t="e") → the error code. These cellValue branches are common in real
+  // exports (checkbox columns, SUM cells, #DIV/0!) but were otherwise unexercised.
+  const types = buildZip([
+    { name: "xl/sharedStrings.xml", data: Buffer.from(`<sst/>`), deflate: false },
+    { name: "xl/workbook.xml", data: Buffer.from(`<workbook xmlns:r="r"><sheets><sheet name="T" sheetId="1" r:id="rId1"/></sheets></workbook>`), deflate: false },
+    { name: "xl/_rels/workbook.xml.rels", data: Buffer.from(`<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>`), deflate: false },
+    {
+      name: "xl/worksheets/sheet1.xml",
+      data: Buffer.from(
+        `<worksheet><sheetData>` +
+          `<row r="1"><c r="A1" t="b"><v>1</v></c><c r="B1" t="b"><v>0</v></c></row>` +
+          `<row r="2"><c r="A2" t="str"><v>Hello</v></c><c r="B2" t="e"><v>#DIV/0!</v></c></row>` +
+          `</sheetData></worksheet>`,
+      ),
+      deflate: true,
+    },
+  ]);
+  const tx2 = await extractDocument("xlsx", types);
+  check("xlsx: boolean cells → TRUE/FALSE", !!tx2 && tx2.text.includes("TRUE\tFALSE"));
+  check("xlsx: formula (t=str) keeps its value, error (t=e) keeps the code", !!tx2 && tx2.text.includes("Hello\t#DIV/0!"));
+
   // --- CSV reads on the plain-text path (no extraction needed) ---
   writeFileSync(join(FIX, "data.csv"), "name,score\nAda,95\nAlan,88\n");
   check("docKindFor: .csv → null (text path)", docKindFor("data.csv", Buffer.from("name,score")) === null);
