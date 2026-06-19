@@ -44,10 +44,11 @@ history/detail lives in `PLAN.md` §11 and `HANDOFF.md`; this file is just the a
 
 ## Backlog (priority order — work the top unblocked item)
 
-- [ ] **Polish / adversarial-review sweep** over this session's Electron + folders + extension changes —
-  surface and fix any real findings.
 - [ ] **Weak/free-model warning** for browser tasks (the model picker should warn when a weak model is
   selected for a browser-heavy task; free models flail).
+- [ ] **Boot-timeout cleanup** (low): if waitForServer times out while the fork is still ALIVE (hung,
+  not crashed), kill that fork before showing the error window so it can't linger holding :3200 / the DB.
+  The crash/exit case is already handled; only the rare hang-without-crash isn't.
 
 ## Blocked — needs the user / attended (DO NOT attempt unattended in the loop)
 
@@ -70,6 +71,19 @@ history/detail lives in `PLAN.md` §11 and `HANDOFF.md`; this file is just the a
 
 ## Done log (newest first)
 
+- 2026-06-19 — Polish / adversarial-review sweep over the Electron + folders + extension changes. A
+  3-phase review workflow surfaced 8 confirmed-real findings (1 false positive correctly rejected); all
+  fixed: electron lifecycle hardening (boot preflight + waitForServer reject-on-exit + error view; async
+  before-quit window with a 4s force-kill fallback; crash respawn with capped backoff; acknowledged
+  key-save), recursive `.env` strip + `dist:dmg` dmg target, extension borrowed-tab reuse gate (v0.2.2),
+  paths comment. A self-review workflow then found + fixed 5 follow-on regressions: phantom respawn on a
+  boot crash → `booting` guard; cached shutdown promise so a 2nd signal/beforeExit can't exit
+  mid-cleanup; `NEXT_MANUAL_SIG_HANDLE=1` so Next doesn't race our shutdown; extension `workTabOwned`
+  flag robust to grouping failure; prepare-standalone EACCES resilience. tsc clean; 22 offline suites
+  green; `.env` strip live-verified (root+nested stripped, node_modules+unreadable skipped).
+  `3ad0ab4`, `e611f9b`, `72258b0`. ⚠️ ATTENDED verification still owed (not autonomously checkable):
+  desktop key save→restart round-trip; extension v0.2.2 reload + a web→desktop tab-hijack check;
+  before-quit / NEXT_MANUAL_SIG_HANDLE quit cleanliness in the real packaged app.
 - 2026-06-19 — instrumentation.ts: register() runs bootstrap() at server startup (explicit boot hook,
   Next instrumentationHook flag), module-init kept as idempotent fallback. Standalone smoke confirmed
   register() fires before serving. `88c6869`.
