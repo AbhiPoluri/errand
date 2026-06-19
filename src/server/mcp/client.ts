@@ -65,6 +65,11 @@ export class McpClient {
   }
 
   private onClose(err?: Error): void {
+    // First close wins. A transport can fire close twice — e.g. the stdio over-long-message path calls
+    // close() (killing the child) and reports the real reason, then the killed child's own exit handler
+    // fires close() again with no error. Without this guard the 2nd call would overwrite the real
+    // closeErr with the generic message and re-fire onDisconnect, masking why the server died.
+    if (this.closed) return;
     this.closed = true;
     this.closeErr = err ?? new Error("MCP transport closed");
     for (const [, p] of this.pending) {

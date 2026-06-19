@@ -5,6 +5,7 @@
 // Run: `npm run mcp:test`.
 import { join } from "node:path";
 import { McpClient } from "./server/mcp/client.ts";
+import type { McpTransport } from "./server/mcp/transport.ts";
 import { mcpToolToErrandTool, mcpToolName } from "./server/mcp/pack.ts";
 import { McpManager } from "./server/mcp/manager.ts";
 import { Registry, type ToolContext } from "./tools/index.ts";
@@ -111,6 +112,35 @@ async function main() {
   check("overlapping configure() both settle without throwing", settled.every((s) => s.status === "fulfilled"));
   check("overlapping configure() leaves exactly one connected server", mgr2.status().filter((s) => s.connected).length === 1, JSON.stringify(mgr2.status()));
   mgr2.closeAll();
+
+  // --- onClose idempotency: a double-close (the over-long path reports the real reason, then the
+  //     killed child's exit fires close() again with no error) must NOT overwrite the reason or
+  //     double-fire onDisconnect ---
+  let capturedClose: ((e?: Error) => void) | null = null;
+  const fake: McpTransport = {
+    start: async () => {},
+    send: () => {},
+    onMessage: () => {},
+    onClose: (cb) => { capturedClose = cb; },
+    close: () => {},
+  };
+  const dc = new McpClient(fake);
+  let disconnects = 0;
+  let lastErr: Error | undefined;
+  dc.onDisconnect((e) => { disconnects++; lastErr = e; });
+  const realReason = new Error("MCP server sent an over-long message (no newline)");
+  capturedClose!(realReason); // 1st close: the genuine reason
+  capturedClose!(undefined); // 2nd close: the killed child's exit handler
+  check("double-close fires onDisconnect exactly once", disconnects === 1, `${disconnects}`);
+  check("double-close keeps the FIRST (real) reason", lastErr === realReason, String(lastErr?.message));
+  check("client is marked closed after close", dc.isClosed === true);
+  let rejMsg = "";
+  try {
+    await dc.listTools(100);
+  } catch (e) {
+    rejMsg = String((e as Error).message);
+  }
+  check("a request after close rejects with the real reason (closeErr not clobbered)", /over-long message/.test(rejMsg), rejMsg);
 
   console.log(`\nRESULT: ${failures === 0 ? "ALL PASS" : failures + " FAILED"}`);
   if (failures) process.exitCode = 1;
