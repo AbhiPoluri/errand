@@ -44,12 +44,6 @@ history/detail lives in `PLAN.md` §11 and `HANDOFF.md`; this file is just the a
 
 ## Backlog (priority order — work the top unblocked item)
 
-- [ ] **Phase 3a — `turn_state` schema migration.** Add migration v2 to `store.ts` MIGRATIONS:
-  create the `turn_state` table (runId PK, turnId, phase, iteration, callCursor, pendingCallId,
-  messages, callCounts, autoApproveReversible, maxEmittedSeq, updatedAt) + `tool_inflight` table +
-  `runs.resumable` column. NO behavior change yet — just the schema + a `migrate:test` assertion that
-  v2 applies cleanly on a fresh DB and on a copy of a v1 DB. (Foundation for resume; see the audit in
-  PLAN §11 / the durability design.)
 - [ ] **Phase 3b — incremental message persistence.** Add `store.saveTurnState/getTurnState/clearTurnState`
   and a no-op `checkpoint` injected into `RunnerOpts`; wire checkpoints in `loop.ts` at the four safe
   boundaries (after pushAssistant, after each pushToolResult, before gate.request, at settle). The
@@ -83,6 +77,8 @@ history/detail lives in `PLAN.md` §11 and `HANDOFF.md`; this file is just the a
 
 ## Done log (newest first)
 
+- 2026-06-19 — Phase 3a: `turn_state` + `tool_inflight` tables + `runs.resumable` column as migration
+  v2 (additive, no behavior change yet — the resumable-runs persistence spine). `d89861f`.
 - 2026-06-18 — Phase 0 foundation (migrations/tx/seq/mutex) `19865b6`; Phase 1 core extraction
   (paths+key `535cf95`, bootstrap/shutdown `ff99604`); Phase 2 Electron wrap (app `c5bf518`, package
   `068b019`, icon `bf074c6`, .env-strip `150b912`); folders safe-folder auto-create `209a0a3`;
