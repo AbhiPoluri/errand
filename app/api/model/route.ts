@@ -29,6 +29,8 @@ export async function GET() {
     // "Eyes": whether screenshots are fed to the model on web tasks, and whether the current model can see them.
     vision: getSetting("vision", "on") !== "off",
     modelCanSee: modelSupportsVision(current),
+    // Trusted browser input (CDP) — reliable clicks/keys on hard sites, at the cost of a debugging banner.
+    browserTrusted: getSetting("browserTrusted", "on") !== "off",
   });
 }
 
@@ -59,6 +61,9 @@ export async function POST(req: NextRequest) {
   if (typeof body?.vision === "boolean") {
     setSetting("vision", body.vision ? "on" : "off");
   }
+  if (typeof body?.browserTrusted === "boolean") {
+    setSetting("browserTrusted", body.browserTrusted ? "on" : "off");
+  }
   const current = getSetting("model", config.model);
   return NextResponse.json({
     ok: true,
@@ -67,5 +72,6 @@ export async function POST(req: NextRequest) {
     ollamaBaseUrl: ollamaBaseUrl(),
     vision: getSetting("vision", "on") !== "off",
     modelCanSee: modelSupportsVision(current),
+    browserTrusted: getSetting("browserTrusted", "on") !== "off",
   });
 }

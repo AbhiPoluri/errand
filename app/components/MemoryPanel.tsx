@@ -24,6 +24,7 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
   const [endpoints, setEndpoints] = useState<{ key: string; label: string; note: string }[]>([]);
   const [vision, setVision] = useState(true);
   const [modelCanSee, setModelCanSee] = useState(false);
+  const [browserTrusted, setBrowserTrusted] = useState(true);
   const [ollamaUrl, setOllamaUrl] = useState("");
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [savingUrl, setSavingUrl] = useState(false);
@@ -86,6 +87,7 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
         setOllamaModels(d.ollamaModels ?? []);
         setVision(d.vision !== false);
         setModelCanSee(!!d.modelCanSee);
+        setBrowserTrusted(d.browserTrusted !== false);
       })
       .catch(() => {});
   };
@@ -140,6 +142,16 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ vision: next }),
+    }).catch(() => {});
+  };
+
+  // Trusted browser input: reliable clicks/keys on hard sites (CDP), at the cost of a debugging banner.
+  const toggleTrusted = async (next: boolean) => {
+    setBrowserTrusted(next);
+    await fetch("/api/model", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ browserTrusted: next }),
     }).catch(() => {});
   };
 
@@ -441,6 +453,26 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
                   className={`relative h-6 w-11 shrink-0 rounded-full transition ${vision ? "bg-accent-600" : "bg-stone-200"}`}
                 >
                   <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${vision ? "left-[1.375rem]" : "left-0.5"}`} />
+                </button>
+              </div>
+
+              {/* Trusted browser input — reliable clicks/keys on hard sites, at the cost of a banner */}
+              <div className="mt-3 flex items-center justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="text-[13px] font-medium text-stone-800">Reliable clicks &amp; keys</p>
+                  <p className="text-[12px] leading-snug text-stone-500">
+                    Drive the page as real input so tough sites (Gmail, Google) respond. Chrome shows a small “debugging this
+                    browser” banner while it works.
+                  </p>
+                </div>
+                <button
+                  onClick={() => toggleTrusted(!browserTrusted)}
+                  role="switch"
+                  aria-checked={browserTrusted}
+                  aria-label="Reliable clicks and keys"
+                  className={`relative h-6 w-11 shrink-0 rounded-full transition ${browserTrusted ? "bg-accent-600" : "bg-stone-200"}`}
+                >
+                  <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${browserTrusted ? "left-[1.375rem]" : "left-0.5"}`} />
                 </button>
               </div>
             </div>

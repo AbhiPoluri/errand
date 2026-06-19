@@ -357,6 +357,85 @@ function hoverIdx(i) {
   return { ok: true };
 }
 
+// ---- Trusted input via the Chrome DevTools Protocol (chrome.debugger) ----
+// Synthetic events are ignored by sites that check event.isTrusted (Gmail's jsaction buttons,
+// DuckDuckGo/Google Enter); CDP Input events are TRUSTED and bypass that. Cost: the "Errand started
+// debugging this browser" banner while attached. Attach lazily on the first trusted action; detach on
+// tab close. CDP injects at the renderer, so it also works on a BACKGROUND tab (no focus-steal).
+const cdpAttached = new Set();
+async function ensureDebugger(tabId) {
+  if (cdpAttached.has(tabId)) return true;
+  try {
+    await chrome.debugger.attach({ tabId }, "1.3");
+    cdpAttached.add(tabId);
+    return true;
+  } catch (e) {
+    if (String((e && e.message) || e).includes("already attached")) {
+      cdpAttached.add(tabId);
+      return true;
+    }
+    return false; // can't attach (e.g. DevTools open) → caller falls back to synthetic
+  }
+}
+chrome.debugger.onDetach.addListener((src) => cdpAttached.delete(src.tabId));
+chrome.tabs.onRemoved.addListener((tabId) => cdpAttached.delete(tabId));
+
+const CDP_KEYS = {
+  Enter: { key: "Enter", code: "Enter", vk: 13, text: "\r" },
+  Escape: { key: "Escape", code: "Escape", vk: 27 },
+  Tab: { key: "Tab", code: "Tab", vk: 9 },
+  Backspace: { key: "Backspace", code: "Backspace", vk: 8 },
+  Delete: { key: "Delete", code: "Delete", vk: 46 },
+  ArrowDown: { key: "ArrowDown", code: "ArrowDown", vk: 40 },
+  ArrowUp: { key: "ArrowUp", code: "ArrowUp", vk: 38 },
+  ArrowLeft: { key: "ArrowLeft", code: "ArrowLeft", vk: 37 },
+  ArrowRight: { key: "ArrowRight", code: "ArrowRight", vk: 39 },
+};
+async function cdpKey(tabId, key) {
+  const k = CDP_KEYS[key];
+  if (!k) return false;
+  const base = { key: k.key, code: k.code, windowsVirtualKeyCode: k.vk, nativeVirtualKeyCode: k.vk };
+  await chrome.debugger.sendCommand({ tabId }, "Input.dispatchKeyEvent", { type: "keyDown", ...base, ...(k.text ? { text: k.text } : {}) });
+  await chrome.debugger.sendCommand({ tabId }, "Input.dispatchKeyEvent", { type: "keyUp", ...base });
+  return true;
+}
+async function cdpMouse(tabId, x, y, mode) {
+  await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none" });
+  if (mode === "hover") return;
+  await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
+  await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+}
+// Injected into the MAIN frame: scroll the element into view and return its viewport-center coords
+// (CSS px, what CDP mouse events use). Pierces shadow roots. Main frame only — sub-frame coords would
+// need the iframe offset, so the caller uses CDP for frameId 0 and synthetic for sub-frames.
+function elementCenter(i) {
+  const find = (root) => {
+    let d = null;
+    try {
+      d = root.querySelector('[data-errand-idx="' + i + '"]');
+    } catch {}
+    if (d) return d;
+    let nodes;
+    try {
+      nodes = root.querySelectorAll("*");
+    } catch {
+      return null;
+    }
+    for (const el of nodes) {
+      if (el.shadowRoot) {
+        const f = find(el.shadowRoot);
+        if (f) return f;
+      }
+    }
+    return null;
+  };
+  const el = find(document);
+  if (!el) return null;
+  el.scrollIntoView({ block: "center", inline: "center" });
+  const r = el.getBoundingClientRect();
+  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+}
+
 async function run(cmd) {
   const tab = await resolveTab();
   if (!tab) return { ok: false, error: "no active tab" };
@@ -402,6 +481,16 @@ async function run(cmd) {
     const { errandFrameMap } = await chrome.storage.session.get("errandFrameMap");
     const m = errandFrameMap && errandFrameMap[cmd.args.index];
     if (!m) return { ok: false, error: "no such element — read the page again" };
+    // TRUSTED click via CDP (main frame only — sub-frame coords need the iframe offset). Falls back
+    // to the synthetic .click() below if trusted mode is off, attach fails, or coords can't be read.
+    if (cmd.type === "click" && cmd.args.trusted && m.frameId === 0 && (await ensureDebugger(tab.id))) {
+      const [cr] = await chrome.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] }, func: elementCenter, args: [m.localIdx] });
+      if (cr && cr.result) {
+        await cdpMouse(tab.id, cr.result.x, cr.result.y, "click");
+        await waitComplete(tab.id, 5000); // a click may navigate
+        return { ok: true };
+      }
+    }
     const func = cmd.type === "click" ? clickIdx : typeIdx;
     const args = cmd.type === "click" ? [m.localIdx] : [m.localIdx, cmd.args.text];
     const [r] = await chrome.scripting.executeScript({ target: { tabId: tab.id, frameIds: [m.frameId] }, func, args });
@@ -417,8 +506,15 @@ async function run(cmd) {
     return r.result;
   }
   if (cmd.type === "key") {
-    // Keys go to whatever has focus — run in ALL frames so a focused field in an email-body iframe
-    // (or a close-on-Escape listener in any frame) is reached; the unfocused frames no-op.
+    // TRUSTED key via CDP — goes to whatever has focus, in any frame. This is what makes Enter
+    // actually submit on isTrusted-strict sites (DuckDuckGo/Google/Gmail).
+    if (cmd.args.trusted && CDP_KEYS[cmd.args.key] && (await ensureDebugger(tab.id))) {
+      await cdpKey(tab.id, cmd.args.key);
+      if (cmd.args.key === "Enter") await waitComplete(tab.id, 5000);
+      return { ok: true };
+    }
+    // Synthetic fallback — run in ALL frames so a focused field in an email-body iframe (or a
+    // close-on-Escape listener in any frame) is reached; the unfocused frames no-op.
     const results = await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, func: pressKey, args: [cmd.args.key] });
     if (cmd.args.key === "Enter") await waitComplete(tab.id, 5000); // Enter may submit/navigate
     return (results.find((x) => x && x.result) || results[0])?.result || { ok: true };
@@ -427,6 +523,13 @@ async function run(cmd) {
     const { errandFrameMap } = await chrome.storage.session.get("errandFrameMap");
     const m = errandFrameMap && errandFrameMap[cmd.args.index];
     if (!m) return { ok: false, error: "no such element — read the page again" };
+    if (cmd.args.trusted && m.frameId === 0 && (await ensureDebugger(tab.id))) {
+      const [cr] = await chrome.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] }, func: elementCenter, args: [m.localIdx] });
+      if (cr && cr.result) {
+        await cdpMouse(tab.id, cr.result.x, cr.result.y, "hover");
+        return { ok: true };
+      }
+    }
     const [r] = await chrome.scripting.executeScript({ target: { tabId: tab.id, frameIds: [m.frameId] }, func: hoverIdx, args: [m.localIdx] });
     return r.result;
   }

@@ -4,6 +4,13 @@
 import * as pw from "./browser.ts";
 import * as ext from "./extension.ts";
 import type { Interactive } from "./browser.ts";
+import { getSetting } from "./store.ts";
+
+// Trusted input (CDP via the extension's debugger) is on unless turned off in Settings. Sending it as
+// a per-command flag keeps the extension stateless about the user's choice.
+function trusted(): boolean {
+  return getSetting("browserTrusted", "on") !== "off";
+}
 
 export function isConnected(): boolean {
   return ext.isExtConnected() || pw.isConnected();
@@ -43,7 +50,7 @@ export async function snapshot(): Promise<{ title: string; text: string; element
 
 export async function clickIndex(i: number): Promise<void> {
   if (ext.isExtConnected()) {
-    const r = await ext.sendCommand("click", { index: i });
+    const r = await ext.sendCommand("click", { index: i, trusted: trusted() });
     if (!r?.ok) throw new Error(r?.error ?? "couldn't click that");
     return;
   }
@@ -80,7 +87,7 @@ export async function scroll(to: string, amount?: number): Promise<void> {
 // move between fields (Tab), navigate an autocomplete (ArrowDown/Up).
 export async function key(k: string): Promise<void> {
   if (ext.isExtConnected()) {
-    const r = await ext.sendCommand("key", { key: k });
+    const r = await ext.sendCommand("key", { key: k, trusted: trusted() });
     if (!r?.ok) throw new Error(r?.error ?? "couldn't press that key");
     return;
   }
@@ -90,7 +97,7 @@ export async function key(k: string): Promise<void> {
 // Hover an element by index — reveals menus/tooltips that only appear on mouse-over.
 export async function hover(i: number): Promise<void> {
   if (ext.isExtConnected()) {
-    const r = await ext.sendCommand("hover", { index: i });
+    const r = await ext.sendCommand("hover", { index: i, trusted: trusted() });
     if (!r?.ok) throw new Error(r?.error ?? "couldn't hover there");
     return;
   }
