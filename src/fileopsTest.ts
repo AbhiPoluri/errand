@@ -271,6 +271,14 @@ async function testExtractZip() {
   await j.undoAll();
   check("undo removed the unpacked folder", !existsSync(dest));
 
+  // Over-cap archive: exceeding MAX_ENTRIES (5000) aborts the WHOLE unpack and leaves NO half-written
+  // folder behind (atomic rollback — a partial tree reported as a failure would be worse than nothing).
+  const manyZip = makeStoredZip(Array.from({ length: 5_001 }, (_, i) => ({ name: `f${i}.txt`, content: "x" })));
+  writeFileSync(join(root, "many.zip"), manyZip);
+  const over = await extractZip.run({ path: join(root, "many.zip") }, ctxFor(root, new Journal()));
+  check("over-cap archive (>5000 entries) is refused", !over.ok && (over as any).error === "unpack_failed", JSON.stringify(over));
+  check("over-cap unpack left NO half-written folder (atomic rollback)", !existsSync(join(root, "many")));
+
   mkdirSync(dest); // now a folder with that name already exists
   const res2 = await extractZip.run({ path: join(root, "bundle.zip") }, ctxFor(root, new Journal()));
   check("refuses when the destination already exists", !res2.ok);
