@@ -147,6 +147,17 @@ function apply(s: RunState, e: AgentEvent): RunState {
   }
 }
 
+// A decision POST that comes back NOT-ok (run evicted/restarted, or the approval already expired
+// server-side) never produces an `approval.resolved` stream event — so without this the amber
+// permission card would wedge forever. Clear the still-showing card and surface a calm snag on the
+// in-flight turn. No-op if the card is already gone or a DIFFERENT approval is now showing (so a
+// late failure can't clobber a fresh approval).
+const DECISION_FAILED_MSG = "That request expired before I could apply your answer — ask me again if you still want it.";
+export function resolveApprovalFailure(s: RunState, callId: string, message = DECISION_FAILED_MSG): RunState {
+  if (!s.approval || s.approval.callId !== callId) return s;
+  return { ...updateLast(s, (t) => ({ ...t, problem: message })), approval: null, phase: "error", thinking: false };
+}
+
 function upsert(steps: Step[], step: Step): Step[] {
   const i = steps.findIndex((x) => x.callId === step.callId);
   if (i === -1) return [...steps, step];
@@ -202,11 +213,19 @@ export function useRun() {
       const { runId, approval } = stateRef.current;
       if (!runId || !approval) return;
       if (decision === "approved_always") setState((s) => ({ ...s, autoApprove: true }));
-      await fetch(`/api/runs/${runId}/decision`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ callId: approval.callId, decision }),
-      });
+      let ok = false;
+      try {
+        const res = await fetch(`/api/runs/${runId}/decision`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ callId: approval.callId, decision }),
+        });
+        const data = await res.json().catch(() => ({}));
+        ok = res.ok && data?.ok !== false; // server resolved it → approval.resolved will clear the card
+      } catch {
+        ok = false;
+      }
+      if (!ok) setState((s) => resolveApprovalFailure(s, approval.callId));
     },
     [],
   );
