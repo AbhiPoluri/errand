@@ -18,8 +18,19 @@ async function setWorkTabId(id) {
   await chrome.storage.session.set({ workTabId: id });
 }
 
-// The tab the agent works in — NEVER the Errand UI tab. Reuses the focused tab if it's a
-// real page; otherwise reuses/creates a dedicated work tab so the UI is left untouched.
+// True when the Errand UI is open as a Chrome TAB — i.e., the WEB app. In the desktop (Electron)
+// app the UI is a native window, so no Chrome tab matches and this returns false.
+async function errandUiOpenInChrome() {
+  try {
+    return (await chrome.tabs.query({ url: BASE + "/*" })).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+// The tab the agent works in — NEVER the Errand UI tab, and NEVER the user's own focused tab when
+// Errand is the desktop app. Reuses its OWN saved work tab across a session; otherwise opens a
+// dedicated BACKGROUND tab in a labeled "Errand" group, so the user's tabs/focus are left untouched.
 async function resolveTab() {
   const saved = await getWorkTabId();
   if (saved != null) {
@@ -30,14 +41,19 @@ async function resolveTab() {
       /* tab was closed */
     }
   }
-  const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (active && !isErrandTab(active)) {
-    await setWorkTabId(active.id);
-    return active;
+  // "Work on the page you're looking at" only makes sense when Errand is driven from a Chrome TAB
+  // (the web app). In the DESKTOP (Electron) app the UI is a native window, so the active Chrome tab
+  // is just whatever the user happens to have open — never hijack it. (This is exactly why the
+  // desktop app stopped opening tabs in the "Errand" group: the active tab was never the UI, so the
+  // old code reused the user's tab.) When the UI isn't a Chrome tab, fall through to a grouped tab.
+  if (await errandUiOpenInChrome()) {
+    const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (active && !isErrandTab(active)) {
+      await setWorkTabId(active.id);
+      return active;
+    }
   }
-  // The focused tab is the Errand UI — open a BACKGROUND tab in a labeled "Errand" group
-  // (like Claude in Chrome) in this window. It's a background tab, so the user's focus is
-  // never stolen; they can click the group to watch the agent live.
+  // Dedicated BACKGROUND tab in a labeled "Errand" group — no focus-steal; click the group to watch.
   const created = await chrome.tabs.create({ url: "about:blank", active: false });
   await setWorkTabId(created.id);
   await groupTab(created.id);
