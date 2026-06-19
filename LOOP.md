@@ -70,11 +70,45 @@ it under needs-attended/needs-user instead of the safe Backlog.
 
 ## Backlog (priority order — work the top unblocked item)
 
-_(Queued by the 2026-06-19 Discovery pass — 4 parallel scouts across the codebase, each candidate
-triaged. Work top-down; re-run Discovery when this empties again.)_
+_(Queued by the 2026-06-19 Discovery #2 pass — 4 parallel scouts (deep), each candidate triaged. Work
+top-down; re-run Discovery when this empties again.)_
 
-_(empty again — the Discovery #1 batch is fully cleared. The next iteration runs the Discovery pass to
-find + queue the next batch.)_
+- [ ] **(high) Fix the length/content_filter tool_call strand** (`src/loop.ts:315,324-336`): when the
+  model is cut off (`finish_reason:"length"`) or filtered (`"content_filter"`) WHILE emitting tool_calls,
+  the assistant message is pushed WITH tool_calls but those two early returns emit run.error and return
+  WITHOUT appending any tool result — stranding a tool_calls message with no matching tool result in the
+  live session. Every follow-up turn (live or rehydrated) then 400s, wedging the conversation. The
+  cancel path is already protected (+ tested in v2test B); these are its unprotected siblings. Fix:
+  before each early return, if toolCalls.length, append a synthetic interrupted/refusal tool result per
+  call (mirror the finally backfill at loop.ts:536-543). Verify: loop:test cases scripting
+  finishResp("length"/"content_filter") WITH a tool_calls array, asserting wellFormed(session.messages).
+- [ ] **(high) Cover journalRestore copy + make_folder inverses** (`src/server/journalRestore.ts:36,41`):
+  the restart-Undo fallback; restart:test only end-to-end-undoes move/write/delete/rename, never a
+  reconstructed `copy` or `make_folder` inverse — so the make_folder "only remove if still EMPTY (never
+  delete a folder the user filled)" safety guard is asserted by nothing. Extend restart:test: rebuild a
+  journal from persisted copy + make_folder manifests, undoAll, assert copy-inverse removes the copy,
+  make_folder removes an empty created dir, make_folder LEAVES a now-non-empty dir, + corrupt
+  make_folder/delete manifests → no inverse. Additive. Verify: restart:test + tsc + full suite.
+- [ ] **(high) Cover pack.ts contentToText + isError→uncertain mapping** (`src/server/mcp/pack.ts:35-44,
+  89-92`): mcpTest only drives the fake server's single text part, so the multi-part join, `json`-part
+  stringify, unknown-type fallback, MAX_MCP_TEXT truncation (`…[truncated]`), and critically the
+  `isError:true` → `{ok:false, outcome:"uncertain"}` safety mapping ("never auto-retry a maybe-committed
+  action") are untested. Add mcpTest cases driving `mcpToolToErrandTool(...).run()` against a tiny stub
+  McpClient (object with a canned `callTool`) — no spawn. (Can fold in the mcpToolName truncation-shape
+  asserts too.) Additive. Verify: mcp:test + tsc.
+- [ ] **(med) Direct unit test for `backfillToolResults`** (`src/session.ts:67-85`): only tested
+  indirectly via resumeTest. Lock: fully-resolved array unchanged; one stranded call → one placeholder;
+  two stranded calls in one assistant message → two placeholders in order; input not mutated. Fold into
+  seqTest (already imports Session) or a new session:test. Additive.
+- [ ] **(med) Cover extractXlsx boolean/formula/error cells** (`src/tools/extract.ts:266-284`): docTest
+  only covers `t="s"` + untyped numbers; the `t="b"`→TRUE/FALSE, `t="str"` formula, and `t="e"` error
+  branches are unasserted. Add a docTest xlsx fixture with those cell types. Additive.
+- [ ] **(med) Cover embedMany malformed-index remap** (`src/server/embed.ts:58-62`): embedtest covers the
+  valid-shuffled remap but not an out-of-range or missing `index` (positional fallback). Add embed:test
+  cases asserting other rows keep their correct positions. Additive.
+- [ ] **(low) Lock the zip MAX_ENTRIES boundary** (`src/tools/zip.ts:58`): an over-cap archive aborts the
+  whole unpack + removes the dest (atomic, intentional) but is untested; the cap consts aren't exported,
+  so this needs a small `export` to test cleanly. Lock current behavior in fileops:test. Lowest priority.
 
 ## Blocked — needs the user / attended (DO NOT attempt unattended in the loop)
 
@@ -97,6 +131,13 @@ find + queue the next batch.)_
 
 ## Done log (newest first)
 
+- 2026-06-19 — **Discovery #2** (deep pass) + clickrisk money-movement fix. 4 parallel scouts went deep
+  (loop/session internals, parsing/tools, server internals, untested-module coverage); triaged → queued
+  8 tasks (3 high incl. a real run-wedge bug + 2 safety-contract coverage gaps, 4 med, 1 low). Worked the
+  top safety bug this iteration: **clickrisk withdraw/transfer/wire** — the highest-stakes autonomy gate
+  classified "Withdraw"/"Transfer" buttons BENIGN, so they'd auto-click on a logged-in bank. Added them
+  to RISKY (word-bounded; "Wired" stays benign); only widens the pause set. clickrisk:test +6. tsc clean;
+  26 offline suites green. `1dc72eb`.
 - 2026-06-19 — `save_as_document` empty-content guard (from Discovery #1, last of the batch). Empty/
   whitespace-only content silently produced a blank docx / 1×1 empty-cell xlsx reported as "Saved."; now
   refused with a calm message. docWriteTest +3. tsc clean; 26 suites green. `082e05e`. **Discovery #1
