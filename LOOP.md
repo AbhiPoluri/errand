@@ -73,13 +73,6 @@ it under needs-attended/needs-user instead of the safe Backlog.
 _(Queued by the 2026-06-19 Discovery pass — 4 parallel scouts across the codebase, each candidate
 triaged. Work top-down; re-run Discovery when this empties again.)_
 
-- [ ] **(med) Tighten run-route status codes + decision allow-list** (`app/api/runs/[runId]/{auto,cancel,
-  decision}/route.ts`): these return 200 `{ok:false}` when the run is gone, while sibling `/message` +
-  `/undo` correctly return 404. Return 404 on a missing run to match; narrow `decision`'s accepted set to
-  the user-submittable decisions (`approved`/`denied`/`approved_always`) so an open client can't inject
-  `cancelled`/`expired`. (The client now degrades gracefully on a 200 `{ok:false}` via the stuck-card
-  fix, so this is now a contract-cleanliness + input-tightening task, not load-bearing.) Verify: tsc +
-  reasoning (small route unit test if practical).
 - [ ] **(med) Fix HANDOFF offline-suite drift** (`HANDOFF.md:24,95-97`): says "22 offline test suites"
   and omits `models` from the list; reality is 23 (models added this session; LOOP's recent Done entries
   already say 23). Update the count + list. Docs-only.
@@ -112,6 +105,11 @@ triaged. Work top-down; re-run Discovery when this empties again.)_
 
 ## Done log (newest first)
 
+- 2026-06-19 — Tighten run-route status codes + decision allow-list (from Discovery #1). /auto, /cancel,
+  /decision now 404 on a missing run (matched /message + /undo, was 200 {ok:false}); /decision's accepted
+  set narrowed to approved/denied/approved_always so internal cancelled/expired can't be injected via the
+  open route. New `runroute:test` (7 assertions, drives the handlers with a bogus run). tsc clean; 26
+  offline suites green. `bd0e2b3`.
 - 2026-06-19 — Lock the folders symlink-escape defense (from Discovery #1). `checkRoots` compares roots
   by resolved real path so a symlink can't masquerade as an allowed folder; only a plain non-allowed
   path was tested. Added 2 cases (symlink → allowed safe folder accepted via real path; symlink under
