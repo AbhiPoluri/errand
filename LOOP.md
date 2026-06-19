@@ -73,13 +73,6 @@ it under needs-attended/needs-user instead of the safe Backlog.
 _(Queued by the 2026-06-19 Discovery #2 pass — 4 parallel scouts (deep), each candidate triaged. Work
 top-down; re-run Discovery when this empties again.)_
 
-- [ ] **(high) Cover pack.ts contentToText + isError→uncertain mapping** (`src/server/mcp/pack.ts:35-44,
-  89-92`): mcpTest only drives the fake server's single text part, so the multi-part join, `json`-part
-  stringify, unknown-type fallback, MAX_MCP_TEXT truncation (`…[truncated]`), and critically the
-  `isError:true` → `{ok:false, outcome:"uncertain"}` safety mapping ("never auto-retry a maybe-committed
-  action") are untested. Add mcpTest cases driving `mcpToolToErrandTool(...).run()` against a tiny stub
-  McpClient (object with a canned `callTool`) — no spawn. (Can fold in the mcpToolName truncation-shape
-  asserts too.) Additive. Verify: mcp:test + tsc.
 - [ ] **(med) Direct unit test for `backfillToolResults`** (`src/session.ts:67-85`): only tested
   indirectly via resumeTest. Lock: fully-resolved array unchanged; one stranded call → one placeholder;
   two stranded calls in one assistant message → two placeholders in order; input not mutated. Fold into
@@ -115,6 +108,10 @@ top-down; re-run Discovery when this empties again.)_
 
 ## Done log (newest first)
 
+- 2026-06-19 — Cover pack.ts contentToText + isError→uncertain mapping (from Discovery #2). Stub-McpClient
+  cases (no spawn) lock the multi-part join / json-stringify / unknown-type fallback / 6000-char
+  truncation, the isError→{ok:false,outcome:"uncertain"} safety contract, thrown→uncertain, and the
+  mcpToolName hash-suffix shape. Additive. tsc clean; 26 suites green. `0fc6aa8`.
 - 2026-06-19 — Cover journalRestore copy + make_folder reconstructed inverses (from Discovery #2). The
   restart-Undo fallback only E2E-undid move/write/delete/rename; now the copy inverse (removes the copy),
   make_folder inverse (removes an empty created dir), and critically the "LEAVES a folder the user
