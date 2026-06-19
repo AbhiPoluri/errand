@@ -335,6 +335,28 @@ function checkpointFor(entry: RunEntry): (s: TurnState) => void {
   };
 }
 
+// Persist each journal op the INSTANT the tool records it (synchronously, inside tool.run), via the
+// Journal.onRecord hook — closing the window where a mutating fs op was durable on disk but its Undo
+// manifest was not yet (it used to land only on the async tool.result event, so a crash in that gap
+// left the change un-undoable). INSERT OR IGNORE on (runId, opId) makes it idempotent with the
+// existing tool.result / turn-settle persistJournal backstop. Skipped for a deleted run.
+function wireJournalPersistence(entry: RunEntry): void {
+  entry.session.journal.onRecord = (e) => {
+    if (entry.deleted) return;
+    try {
+      store.appendJournalOp(entry.runId, {
+        opId: e.id,
+        op: e.op,
+        description: e.description,
+        reversibility: e.reversibility,
+        manifest: e.manifest,
+      });
+    } catch (err) {
+      console.warn(`[errand] failed to persist journal op for run ${entry.runId} (continuing):`, err);
+    }
+  };
+}
+
 // Enqueue a turn. The work chains onto entry.turnQueue so it can't begin until any prior turn has
 // fully settled — guaranteeing one runner.send() at a time on this run's Session. The queue never
 // rejects (execTurn swallows its own errors), so the chain can't break.
@@ -405,6 +427,7 @@ export async function startRun(message: string, roots?: string[]): Promise<strin
   });
   store.createRun(runId, entry.title, entry.createdAt, usedRoots);
   attachPersistence(entry);
+  wireJournalPersistence(entry); // persist each manifest at record-time, before the fs window closes
   runs.set(runId, entry);
   runTurn(entry, message);
   return runId;
@@ -455,6 +478,7 @@ function rehydrate(runId: string): RunEntry | undefined {
     startSeq: maxSeq + 1,
   });
   attachPersistence(entry);
+  wireJournalPersistence(entry); // set AFTER rebuildJournalFromStore above, so the restore doesn't re-persist
   runs.set(runId, entry);
   return entry;
 }

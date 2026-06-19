@@ -66,11 +66,57 @@ async function testSkipAndEmpty() {
   check("empty journal -> all zeros", empty.undone === 0 && empty.failed === 0 && empty.skipped === 0);
 }
 
+function testOnRecordHook() {
+  console.log("\n== onRecord fires SYNCHRONOUSLY at record-time (manifest persisted before the fs window) ==");
+  const j = new Journal();
+  const seen: { id: string; manifest: unknown; reversibility: string }[] = [];
+  let firedSynchronously = false;
+  j.onRecord = (e) => seen.push({ id: e.id, manifest: e.manifest, reversibility: e.reversibility });
+
+  const id = j.record({
+    op: "write",
+    description: "wrote a file",
+    reversibility: "reversible",
+    inverse: async () => {},
+    manifest: { kind: "write", path: "/x/a.txt", wasNew: true, snapshot: null },
+  });
+  firedSynchronously = seen.length === 1; // checked immediately after record() returns — no await
+  check("onRecord fired exactly once, synchronously during record()", firedSynchronously);
+  check("...with the generated id and the manifest intact", seen[0]?.id === id && (seen[0]?.manifest as any)?.kind === "write");
+
+  // It receives the FINAL entry — a reversible-without-inverse is demoted before the hook sees it.
+  const seen2: string[] = [];
+  const j2 = new Journal();
+  j2.onRecord = (e) => seen2.push(e.reversibility);
+  j2.record({ op: "write", description: "no inverse", reversibility: "reversible" });
+  check("onRecord sees the demoted reversibility ('unknown'), not the claimed one", seen2[0] === "unknown", seen2[0]);
+
+  // A throwing hook must NOT break record() (persistence failure can't lose the in-memory op).
+  const j3 = new Journal();
+  j3.onRecord = () => {
+    throw new Error("disk full");
+  };
+  let threw = false;
+  let rid = "";
+  try {
+    rid = j3.record({ op: "move", description: "m", reversibility: "reversible", inverse: async () => {} });
+  } catch {
+    threw = true;
+  }
+  check("a throwing onRecord does not break record()", !threw && !!rid && j3.list().length === 1);
+
+  // No hook set -> record() works exactly as before (no throw).
+  const j4 = new Journal();
+  j4.record({ op: "x", description: "no hook", reversibility: "unknown" });
+  check("record() works with no onRecord set", j4.list().length === 1);
+}
+
 async function main() {
   testDemotion();
   testLabelsKept();
   await testPartialFailureAndLifo();
   await testSkipAndEmpty();
+  testOnRecordHook();
   console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILED"}`);
   process.exit(failures === 0 ? 0 : 1);
 }

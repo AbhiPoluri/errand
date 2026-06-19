@@ -37,6 +37,17 @@ export interface JournalEntry {
 export class Journal {
   private entries: JournalEntry[] = [];
 
+  // Optional hook fired SYNCHRONOUSLY the instant an op is recorded — i.e. inside the tool's run(),
+  // right after its mutating fs call, with NO async yield in between. The host wires this to persist
+  // the manifest immediately, instead of deferring it to the later async `tool.result` event. That
+  // deferral was the bug: a mutating op was durable on disk while its Undo manifest was not yet —
+  // a process restart/kill in that (async) window left the change un-undoable. Recording stays AFTER
+  // the successful mutation (so a failed op is never journaled), but persistence is now synchronous —
+  // a restart/kill can't land between the mutation and the manifest write (no yield between them).
+  // (Power-loss durability is a separate matter: WAL synchronous=NORMAL fsyncs at checkpoint, not per
+  // commit — unchanged by this hook and identical to the old tool.result path.) Never breaks record().
+  onRecord?: (entry: JournalEntry) => void;
+
   // `id` is normally generated; rebuildJournalFromStore passes the persisted opId so the same
   // entry re-persists idempotently (INSERT OR IGNORE) instead of duplicating on the next turn.
   record(entry: Omit<JournalEntry, "id" | "ts"> & { id?: string }): string {
@@ -44,7 +55,15 @@ export class Journal {
     // If something claims 'reversible' but recorded no inverse, demote it — never lie.
     const reversibility: Reversibility =
       entry.reversibility === "reversible" && typeof entry.inverse !== "function" ? "unknown" : entry.reversibility;
-    this.entries.push({ ...entry, reversibility, id, ts: Date.now() });
+    const recorded: JournalEntry = { ...entry, reversibility, id, ts: Date.now() };
+    this.entries.push(recorded);
+    if (this.onRecord) {
+      try {
+        this.onRecord(recorded);
+      } catch {
+        /* persisting the manifest must never break the tool's record() call */
+      }
+    }
     return id;
   }
 
