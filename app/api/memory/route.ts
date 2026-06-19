@@ -13,7 +13,13 @@ export async function GET() {
 export async function DELETE(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   if (typeof body?.id !== "string") return NextResponse.json({ error: "id required" }, { status: 400 });
-  if (body.type === "suggestion") deleteSuggestion(body.id);
+  // Require an explicit, known type (default "memory" for back-compat when omitted). Without this, a
+  // typo'd type silently fell through to deleteMemory — deleting from the wrong store.
+  const type = body.type === undefined ? "memory" : body.type;
+  if (type !== "memory" && type !== "suggestion") {
+    return NextResponse.json({ error: 'type must be "memory" or "suggestion"' }, { status: 400 });
+  }
+  if (type === "suggestion") deleteSuggestion(body.id);
   else deleteMemory(body.id);
   return NextResponse.json({ ok: true });
 }

@@ -42,8 +42,13 @@ export async function POST(req: NextRequest) {
 // DELETE /api/runs — remove one or more conversations. Body: { ids: string[] }.
 export async function DELETE(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
-  const ids = Array.isArray(body?.ids) ? body.ids.filter((x: unknown) => typeof x === "string") : [];
+  // De-dupe (each removeRun aborts a live run + deletes a DB row, so a duplicated array shouldn't do
+  // the work N times) and bound the batch so a pathological request can't loop unboundedly.
+  const ids = Array.isArray(body?.ids)
+    ? ([...new Set(body.ids.filter((x: unknown) => typeof x === "string"))] as string[])
+    : [];
   if (!ids.length) return NextResponse.json({ error: "no ids" }, { status: 400 });
+  if (ids.length > 200) return NextResponse.json({ error: "too many ids (max 200)" }, { status: 400 });
   for (const id of ids) removeRun(id);
-  return NextResponse.json({ ok: true, deleted: ids.length });
+  return NextResponse.json({ ok: true, deleted: ids.length }); // distinct ids processed (removeRun is idempotent)
 }

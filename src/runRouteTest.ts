@@ -11,6 +11,8 @@ process.env.ERRAND_DB = dbPath; // MUST be set before runRegistry/store opens th
 const auto = (await import("../app/api/runs/[runId]/auto/route.ts")).POST;
 const cancel = (await import("../app/api/runs/[runId]/cancel/route.ts")).POST;
 const decision = (await import("../app/api/runs/[runId]/decision/route.ts")).POST;
+const runsDelete = (await import("../app/api/runs/route.ts")).DELETE;
+const memDelete = (await import("../app/api/memory/route.ts")).DELETE;
 
 let failures = 0;
 const check = (name: string, cond: boolean, detail = "") => {
@@ -32,6 +34,16 @@ check("decision: unknown value -> 400", (await status(decision(req({ callId: "c1
 check("decision: 'cancelled' rejected (allow-list narrowed) -> 400", (await status(decision(req({ callId: "c1", decision: "cancelled" }), params))) === 400);
 check("decision: 'expired' rejected -> 400", (await status(decision(req({ callId: "c1", decision: "expired" }), params))) === 400);
 check("decision: missing callId -> 400", (await status(decision(req({ decision: "approved" }), params))) === 400);
+
+// --- DELETE-route hardening: bounds + de-dupe (runs), known-type requirement (memory) ---
+check("runs DELETE: empty ids -> 400", (await status(runsDelete(req({ ids: [] })))) === 400);
+check("runs DELETE: over-cap (>200) -> 400", (await status(runsDelete(req({ ids: Array.from({ length: 201 }, (_, i) => `r${i}`) })))) === 400);
+const dedup = await runsDelete(req({ ids: ["a", "a", "b"] }));
+check("runs DELETE: de-dupes the batch (deleted=2 for [a,a,b])", dedup.status === 200 && (await dedup.json()).deleted === 2);
+check("memory DELETE: missing id -> 400", (await status(memDelete(req({ type: "memory" })))) === 400);
+check("memory DELETE: unknown type -> 400 (was a silent wrong-store delete)", (await status(memDelete(req({ id: "m1", type: "bogus" })))) === 400);
+check("memory DELETE: type omitted defaults to memory -> 200", (await status(memDelete(req({ id: "m1" })))) === 200);
+check("memory DELETE: suggestion -> 200", (await status(memDelete(req({ id: "s1", type: "suggestion" })))) === 200);
 
 rmSync(dbPath, { force: true });
 console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILED"}`);
