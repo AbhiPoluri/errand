@@ -41,6 +41,7 @@
     "build:web": "next build && node scripts/prepare-standalone.mjs",
     "electron": "electron .",
     "app": "npm run build:web && electron .",
+    "set-key": "electron scripts/set-key.cjs",
     "dist": "npm run build:web && electron-builder --mac --dir",
     "dist:dmg": "npm run build:web && electron-builder --mac"
   },
