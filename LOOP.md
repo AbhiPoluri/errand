@@ -73,9 +73,6 @@ it under needs-attended/needs-user instead of the safe Backlog.
 _(Queued by the 2026-06-19 Discovery pass — 4 parallel scouts across the codebase, each candidate
 triaged. Work top-down; re-run Discovery when this empties again.)_
 
-- [ ] **(med) Fix HANDOFF offline-suite drift** (`HANDOFF.md:24,95-97`): says "22 offline test suites"
-  and omits `models` from the list; reality is 23 (models added this session; LOOP's recent Done entries
-  already say 23). Update the count + list. Docs-only.
 - [ ] **(low) Harden DELETE routes** (`app/api/runs/route.ts` DELETE, `app/api/memory/route.ts` DELETE):
   cap + de-dupe the runs `ids` array (currently unbounded; each is an abort+DB-delete) and return the
   real removed count; require `/api/memory` DELETE `type` ∈ {memory,suggestion} (a typo'd type silently
@@ -105,6 +102,9 @@ triaged. Work top-down; re-run Discovery when this empties again.)_
 
 ## Done log (newest first)
 
+- 2026-06-19 — Fix HANDOFF offline-suite drift (from Discovery #1). Corrected "22 offline test suites"
+  → 26 (lines 24 + 95) and added models/mcpconfig/userun/runroute to the list; verified the list equals
+  all package.json *:test minus mem/doc/ocr. Docs-only. `b8ef572`.
 - 2026-06-19 — Tighten run-route status codes + decision allow-list (from Discovery #1). /auto, /cancel,
   /decision now 404 on a missing run (matched /message + /undo, was 200 {ok:false}); /decision's accepted
   set narrowed to approved/denied/approved_always so internal cancelled/expired can't be injected via the
