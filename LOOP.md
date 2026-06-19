@@ -73,11 +73,6 @@ it under needs-attended/needs-user instead of the safe Backlog.
 _(Queued by the 2026-06-19 Discovery pass — 4 parallel scouts across the codebase, each candidate
 triaged. Work top-down; re-run Discovery when this empties again.)_
 
-- [ ] **(med) Lock the folders symlink-escape defense** (`src/server/folders.ts:68` `checkRoots`):
-  `foldersTest.ts` only checks a plain non-allowed path, never the realpath/symlink comparison that stops
-  a symlink masquerading as an allowed folder. Add temp-dir cases: a symlink whose target is inside an
-  allowed root is accepted; a symlink whose target is outside (e.g. `/etc`) is rejected even though its
-  own path sits under a temp dir. Purely additive. Verify: `npm run folders:test` + tsc + full suite.
 - [ ] **(med) Tighten run-route status codes + decision allow-list** (`app/api/runs/[runId]/{auto,cancel,
   decision}/route.ts`): these return 200 `{ok:false}` when the run is gone, while sibling `/message` +
   `/undo` correctly return 404. Return 404 on a missing run to match; narrow `decision`'s accepted set to
@@ -117,6 +112,10 @@ triaged. Work top-down; re-run Discovery when this empties again.)_
 
 ## Done log (newest first)
 
+- 2026-06-19 — Lock the folders symlink-escape defense (from Discovery #1). `checkRoots` compares roots
+  by resolved real path so a symlink can't masquerade as an allowed folder; only a plain non-allowed
+  path was tested. Added 2 cases (symlink → allowed safe folder accepted via real path; symlink under
+  the data dir → outside target rejected). Purely additive. tsc clean; 26 suites green. `2fc58e3`.
 - 2026-06-19 — MCP onClose idempotency (from Discovery #1). A transport can fire close twice (over-long
   path reports the real reason, then the killed child's exit fires close() again with no error); onClose
   ran both times, overwriting `closeErr` with a generic message + double-firing onDisconnect. Added
