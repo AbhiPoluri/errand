@@ -250,4 +250,67 @@ export const browserScroll: Tool<{ to?: "down" | "up" | "top" | "bottom"; amount
   },
 };
 
-export const browserTools = [browserNavigate, browserRead, browserScroll, browserClick, browserType];
+// Keys that the model can press. Enter can SUBMIT (a search/form), so it's treated as a real action
+// (gates like a click); the rest just navigate/edit and run freely.
+const KEYS = ["Enter", "Escape", "Tab", "Backspace", "Delete", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight"] as const;
+
+export const browserKey: Tool<{ key: (typeof KEYS)[number] }> = {
+  name: "browser_key",
+  modelDescription:
+    "Press a key on the page. Use Enter to submit a search or form you've filled, Escape to close a menu/dialog, Tab to move to the next field, or ArrowDown/ArrowUp to move through an autocomplete or list. Type into a field with browser_type first.",
+  jsonSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["key"],
+    properties: { key: { type: "string", enum: [...KEYS], description: "The key to press." } },
+  },
+  argsSchema: z.object({ key: z.enum(KEYS) }),
+  gated: false,
+  describe: (a) => ({
+    action: `Press ${a.key}`,
+    // Enter can commit something (submit a search/form); the rest are benign navigation/editing.
+    reversibility: a.key === "Enter" ? "unknown" : "reversible",
+  }),
+  summarize: (r) => (r.ok ? "Pressed the key." : (r.summary ?? "I couldn't press that key.")),
+  run: async (a, ctx): Promise<ToolResult> => {
+    if (!browser.isConnected()) return NOT_CONNECTED;
+    try {
+      await browser.key(a.key);
+      const obs = await observe(ctx);
+      return obs ? { ok: true, data: obs } : unverified(a.key === "Enter"); // Enter may have committed
+    } catch (e: any) {
+      return { ok: false, error: String(e?.message ?? e) };
+    }
+  },
+};
+
+export const browserHover: Tool<{ index: number }> = {
+  name: "browser_hover",
+  modelDescription:
+    "Hover the mouse over an element by its index from browser_read — use this to reveal a menu or tooltip that only appears on mouse-over, then read the page again to see what opened.",
+  jsonSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["index"],
+    properties: { index: { type: "integer", description: "Index of the element from browser_read." } },
+  },
+  argsSchema: z.object({ index: z.number().int().nonnegative() }),
+  gated: false,
+  describe: (a) => {
+    const el = browser.elementInfo(a.index);
+    return { action: el?.label ? `Hover over "${el.label}"` : `Hover over item ${a.index}`, reversibility: "reversible" };
+  },
+  summarize: (r) => (r.ok ? "Hovered — checking what appeared." : (r.summary ?? "I couldn't hover there.")),
+  run: async (a, ctx): Promise<ToolResult> => {
+    if (!browser.isConnected()) return NOT_CONNECTED;
+    try {
+      await browser.hover(a.index);
+      const obs = await observe(ctx);
+      return obs ? { ok: true, data: obs } : unverified(false);
+    } catch (e: any) {
+      return { ok: false, error: String(e?.message ?? e) };
+    }
+  },
+};
+
+export const browserTools = [browserNavigate, browserRead, browserScroll, browserClick, browserType, browserKey, browserHover];

@@ -4,7 +4,7 @@
 // loop, which died whenever Chrome suspended the idle service worker.
 export interface ExtCommand {
   id: string;
-  type: "navigate" | "read" | "click" | "type" | "screenshot" | "scroll";
+  type: "navigate" | "read" | "click" | "type" | "screenshot" | "scroll" | "key" | "hover";
   args: any;
 }
 

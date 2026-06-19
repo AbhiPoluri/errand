@@ -75,3 +75,24 @@ export async function scroll(to: string, amount?: number): Promise<void> {
   }
   await pw.scroll(to, amount);
 }
+
+// Press a key on the focused field/page — submit a search (Enter), close a menu/dialog (Escape),
+// move between fields (Tab), navigate an autocomplete (ArrowDown/Up).
+export async function key(k: string): Promise<void> {
+  if (ext.isExtConnected()) {
+    const r = await ext.sendCommand("key", { key: k });
+    if (!r?.ok) throw new Error(r?.error ?? "couldn't press that key");
+    return;
+  }
+  await pw.pressKey(k);
+}
+
+// Hover an element by index — reveals menus/tooltips that only appear on mouse-over.
+export async function hover(i: number): Promise<void> {
+  if (ext.isExtConnected()) {
+    const r = await ext.sendCommand("hover", { index: i });
+    if (!r?.ok) throw new Error(r?.error ?? "couldn't hover there");
+    return;
+  }
+  await pw.hoverIndex(i);
+}

@@ -214,6 +214,18 @@ export async function typeIndex(i: number, text: string): Promise<void> {
   await h.fill(text, { timeout: 8000 });
 }
 
+export async function pressKey(key: string): Promise<void> {
+  const page = getPage();
+  if (!page) throw new Error("not connected");
+  await page.keyboard.press(key);
+}
+
+export async function hoverIndex(i: number): Promise<void> {
+  const h = state.elements?.[i];
+  if (!h) throw new Error("no such element — read the page again");
+  await h.hover({ timeout: 8000 });
+}
+
 export async function scroll(to: string, amount?: number): Promise<void> {
   const page = getPage();
   if (!page) throw new Error("not connected");

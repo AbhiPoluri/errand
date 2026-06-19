@@ -140,12 +140,12 @@ function readPage() {
   //    alertdialog, plus a bounded fallback for a role-less centered overlay holding buttons.
   let modal = null;
   try {
-    for (const m of document.querySelectorAll('[aria-modal="true"], [role=alertdialog]')) {
-      if (isVisible(m)) {
-        modal = m;
-        break;
-      }
-    }
+    // Any visible ARIA dialog (dialog / alertdialog / aria-modal) that holds a control is a foreground
+    // modal. Pick the LAST in document order — a freshly-opened dialog is appended late, so it's on top.
+    const dialogs = [...document.querySelectorAll('[aria-modal="true"], [role=alertdialog], [role=dialog]')].filter(
+      (d) => isVisible(d) && d.querySelector("a, button, input, textarea, select, [role=button], [jsaction]"),
+    );
+    if (dialogs.length) modal = dialogs[dialogs.length - 1];
     if (!modal) {
       let best = null;
       let bestZ = 0;
@@ -280,6 +280,82 @@ function typeIdx(i, text) {
   el.dispatchEvent(new Event("change", { bubbles: true }));
   return { ok: true };
 }
+// Press a key on the focused element (or document). Synthetic KeyboardEvent for handler-based sites,
+// PLUS native fallbacks so it actually does the thing: Enter submits a form (requestSubmit) when no
+// handler took over; Escape also fires on document (close-on-escape listeners); Tab moves focus.
+function pressKey(key) {
+  const KEYS = {
+    Enter: { key: "Enter", code: "Enter", keyCode: 13 },
+    Escape: { key: "Escape", code: "Escape", keyCode: 27 },
+    Tab: { key: "Tab", code: "Tab", keyCode: 9 },
+    Backspace: { key: "Backspace", code: "Backspace", keyCode: 8 },
+    Delete: { key: "Delete", code: "Delete", keyCode: 46 },
+    ArrowDown: { key: "ArrowDown", code: "ArrowDown", keyCode: 40 },
+    ArrowUp: { key: "ArrowUp", code: "ArrowUp", keyCode: 38 },
+    ArrowLeft: { key: "ArrowLeft", code: "ArrowLeft", keyCode: 37 },
+    ArrowRight: { key: "ArrowRight", code: "ArrowRight", keyCode: 39 },
+  };
+  const k = KEYS[key] || { key: key, code: "Key" + key.toUpperCase(), keyCode: key.charCodeAt(0) || 0 };
+  const el = document.activeElement && document.activeElement !== document.body ? document.activeElement : document.body;
+  const opt = { bubbles: true, cancelable: true, key: k.key, code: k.code, keyCode: k.keyCode, which: k.keyCode };
+  const prevented = !el.dispatchEvent(new KeyboardEvent("keydown", opt));
+  if (key === "Enter" || key.length === 1) el.dispatchEvent(new KeyboardEvent("keypress", opt));
+  el.dispatchEvent(new KeyboardEvent("keyup", opt));
+  if (key === "Escape") document.dispatchEvent(new KeyboardEvent("keydown", opt)); // many listen on document
+  if (key === "Enter") {
+    // Force the form to submit. A synthetic keydown is often ignored (sites check event.isTrusted),
+    // but requestSubmit() reliably submits the form and navigates to its action (e.g. search results)
+    // — verified on DuckDuckGo where the keydown was intercepted. Fires the form's own submit handler,
+    // so AJAX forms still behave; no-ops harmlessly if a keydown handler already navigated.
+    const form = el.form || (el.closest && el.closest("form"));
+    if (form) {
+      try {
+        form.requestSubmit ? form.requestSubmit() : form.submit();
+      } catch {}
+    }
+  }
+  if (key === "Tab") {
+    const f = [...document.querySelectorAll("a,button,input,select,textarea,[tabindex]")].filter(
+      (e) => e.offsetParent && e.tabIndex >= 0,
+    );
+    const i = f.indexOf(el);
+    if (i >= 0 && f[i + 1]) f[i + 1].focus();
+  }
+  return { ok: true };
+}
+// Hover an element by index (deep-find across shadow roots) — reveals mouse-over menus/tooltips.
+function hoverIdx(i) {
+  const find = (root) => {
+    let d = null;
+    try {
+      d = root.querySelector('[data-errand-idx="' + i + '"]');
+    } catch {}
+    if (d) return d;
+    let nodes;
+    try {
+      nodes = root.querySelectorAll("*");
+    } catch {
+      return null;
+    }
+    for (const el of nodes) {
+      if (el.shadowRoot) {
+        const f = find(el.shadowRoot);
+        if (f) return f;
+      }
+    }
+    return null;
+  };
+  const el = find(document);
+  if (!el) return { ok: false, error: "no such element" };
+  el.scrollIntoView({ block: "center" });
+  const r = el.getBoundingClientRect();
+  const o = { bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, view: window };
+  el.dispatchEvent(new PointerEvent("pointerover", o));
+  el.dispatchEvent(new MouseEvent("mouseover", o));
+  el.dispatchEvent(new MouseEvent("mouseenter", { ...o, bubbles: false }));
+  el.dispatchEvent(new MouseEvent("mousemove", o));
+  return { ok: true };
+}
 
 async function run(cmd) {
   const tab = await resolveTab();
@@ -338,6 +414,20 @@ async function run(cmd) {
       func: scrollPage,
       args: [cmd.args.to || "down", cmd.args.amount || 0],
     });
+    return r.result;
+  }
+  if (cmd.type === "key") {
+    // Keys go to whatever has focus — run in ALL frames so a focused field in an email-body iframe
+    // (or a close-on-Escape listener in any frame) is reached; the unfocused frames no-op.
+    const results = await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, func: pressKey, args: [cmd.args.key] });
+    if (cmd.args.key === "Enter") await waitComplete(tab.id, 5000); // Enter may submit/navigate
+    return (results.find((x) => x && x.result) || results[0])?.result || { ok: true };
+  }
+  if (cmd.type === "hover") {
+    const { errandFrameMap } = await chrome.storage.session.get("errandFrameMap");
+    const m = errandFrameMap && errandFrameMap[cmd.args.index];
+    if (!m) return { ok: false, error: "no such element — read the page again" };
+    const [r] = await chrome.scripting.executeScript({ target: { tabId: tab.id, frameIds: [m.frameId] }, func: hoverIdx, args: [m.localIdx] });
     return r.result;
   }
   return { ok: false, error: "unknown command" };
