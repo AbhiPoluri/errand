@@ -10,6 +10,9 @@ const nextConfig = {
   // route handlers. (Next 14 key.)
   experimental: {
     serverComponentsExternalPackages: ["playwright-core", "unpdf", "tesseract.js"],
+    // Enable instrumentation.ts register() — the explicit boot hook that runs bootstrap() at server
+    // startup (Next 14 needs this flag; it's default in 15). See instrumentation.ts.
+    instrumentationHook: true,
   },
   // The harness in src/ imports siblings with explicit .ts extensions (so it also runs
   // standalone under tsx). Teach webpack to resolve those specifiers.

@@ -173,11 +173,13 @@ function wireShutdown(): void {
   process.once("beforeExit", onSignal);
 }
 
-// Next has no "app start" hook inside route handlers, so trigger the boot step on the first import
-// of this module (every /api/runs/* route imports it). It completes before the route body runs, so
-// the "reconcile before any getRun" ordering holds. Electron main will instead set the env, import
-// the core, then call bootstrap() explicitly — the idempotent guards make this module-init call a
-// no-op there. (Migrating Next to an instrumentation.ts register() hook is a Phase-2 refinement.)
+// The PRIMARY boot trigger is now Next's instrumentation.ts register() hook, which runs once at
+// server startup BEFORE any route is served (see ../../instrumentation.ts). This module-init call is
+// kept as an idempotent FALLBACK: a host that imports the core without that hook (the CLI, a test, or
+// a Next build with the hook disabled) still boots. Both go through the same globalThis-guarded
+// bootstrap(), so whichever runs first wins and the other is a no-op — there is no double-boot, and
+// the "reconcile before any getRun" ordering holds either way (register() is awaited before serving;
+// this call completes before the first route body runs).
 bootstrap();
 
 function buildRegistry(): Registry {
