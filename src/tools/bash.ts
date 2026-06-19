@@ -14,8 +14,9 @@ type Args = z.infer<typeof Args>;
 const TIMEOUT_MS = 15_000;
 const OUTPUT_CAP = 16_000;
 
-// Catastrophic patterns refused even if the user approves.
-const DENY = [
+// Catastrophic patterns refused even if the user approves. Exported so bashTest can lock them — a
+// regex regression here would silently let a destructive command through after approval.
+export const DENY = [
   /\brm\s+-rf?\s+[~/]/, // rm -rf / or ~
   /\bsudo\b/,
   /\bmkfs\b/,
@@ -27,8 +28,8 @@ const DENY = [
   /\bchmod\s+-R\s+777\s+\//,
 ];
 
-// Shell metacharacters mean describe() can't enumerate what will change.
-const SHELL_META = /[|&;<>$`(){}\[\]*?]|\$\(/;
+// Shell metacharacters mean describe() can't enumerate what will change. Exported for bashTest.
+export const SHELL_META = /[|&;<>$`(){}\[\]*?]|\$\(/;
 
 function programOf(command: string): string {
   return command.trim().split(/\s+/)[0] ?? "command";
