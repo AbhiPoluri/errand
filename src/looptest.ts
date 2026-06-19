@@ -55,6 +55,24 @@ function textResp(text: string) {
 function finishResp(reason: string, text = "") {
   return { choices: [{ message: { role: "assistant", content: text }, finish_reason: reason }], usage: null };
 }
+// A completion that ends with finish_reason length/content_filter WHILE carrying tool_calls — the
+// model cut off / filtered mid-tool-call. The loop must still backfill a tool result so the session
+// doesn't strand the assistant tool_calls message and 400 next turn.
+function toolCallFinishResp(reason: string, name: string, args: unknown, callId: string, text = "") {
+  return {
+    choices: [
+      {
+        message: {
+          role: "assistant",
+          content: text || null,
+          tool_calls: [{ id: callId, type: "function", function: { name, arguments: JSON.stringify(args) } }],
+        },
+        finish_reason: reason,
+      },
+    ],
+    usage: null,
+  };
+}
 // A tool call whose arguments string is passed through verbatim (to script malformed JSON).
 function rawToolCallResp(name: string, rawArgs: string, callId: string) {
   return {
@@ -226,6 +244,28 @@ async function testContentFilterExit() {
   check("no normal finish was reported", !tap.events.some((e) => e.type === "run.finished"));
 }
 
+async function testLengthWithToolCallsStaysWellFormed() {
+  console.log("\n== 4b. finish_reason=length WITH tool_calls -> result backfilled, messages well-formed ==");
+  const registry = new Registry().register(stubTool("do_thing", { result: { ok: true } }));
+  const { runner, session, tap } = makeRunner(registry, () => toolCallFinishResp("length", "do_thing", { x: 1 }, crypto.randomUUID(), "partial"));
+  await runner.send("cut off mid-tool-call", new AbortController().signal);
+  const err = tap.events.find((e) => e.type === "run.error");
+  check("run.error kind=length", err?.type === "run.error" && err.kind === "length");
+  const wf = wellFormed(session.messages as Msg[]);
+  check("messages well-formed (stranded tool_call was backfilled, won't 400 next turn)", wf.ok, wf.detail);
+}
+
+async function testContentFilterWithToolCallsStaysWellFormed() {
+  console.log("\n== 5b. finish_reason=content_filter WITH tool_calls -> result backfilled, well-formed ==");
+  const registry = new Registry().register(stubTool("do_thing", { result: { ok: true } }));
+  const { runner, session, tap } = makeRunner(registry, () => toolCallFinishResp("content_filter", "do_thing", { x: 1 }, crypto.randomUUID()));
+  await runner.send("filtered mid-tool-call", new AbortController().signal);
+  const err = tap.events.find((e) => e.type === "run.error");
+  check("run.error kind=content_filter", err?.type === "run.error" && err.kind === "content_filter");
+  const wf = wellFormed(session.messages as Msg[]);
+  check("messages well-formed (stranded tool_call was backfilled, won't 400 next turn)", wf.ok, wf.detail);
+}
+
 async function testUnknownToolStaysWellFormed() {
   console.log("\n== 6. unknown tool name -> result still appended, messages well-formed ==");
   const registry = new Registry().register(stubTool("do_thing", { result: { ok: true } }));
@@ -376,6 +416,8 @@ async function main() {
   await testDeniedApprovalsDoNotAbort();
   await testLengthExit();
   await testContentFilterExit();
+  await testLengthWithToolCallsStaysWellFormed();
+  await testContentFilterWithToolCallsStaysWellFormed();
   await testUnknownToolStaysWellFormed();
   await testInvalidArgsStaysWellFormed();
   console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILED"}`);

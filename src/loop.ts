@@ -315,6 +315,17 @@ export class AgentRunner {
       this.o.session.pushAssistant(msg as unknown as OpenAI.Chat.Completions.ChatCompletionMessageParam);
       if (usage) this.o.logger.log("usage", usage);
 
+      // If we abandon this turn while tool_calls are already committed to the session (the length /
+      // content_filter early returns below), EVERY call must still get a tool result — otherwise
+      // session.messages strands an assistant tool_calls message with no matching tool reply and 400s
+      // on the next turn (live or rehydrated). Mirrors the post-execution `finally` backfill + the
+      // rehydrate placeholder. No-op when there are no tool_calls.
+      const backfillStrandedCalls = () => {
+        for (const call of toolCalls) {
+          this.o.session.pushToolResult(call.id, toToolMessage({ ok: false, error: "interrupted" }));
+        }
+      };
+
       // Never surface raw chain-of-thought — log it, emit a safe summary only.
       if (reasoning.trim()) {
         this.o.logger.log("reasoning", reasoning);
@@ -322,6 +333,7 @@ export class AgentRunner {
       }
 
       if (finishReason === "length") {
+        backfillStrandedCalls(); // keep session.messages 400-safe if cut off mid-tool_calls
         await this.emit({
           type: "run.error",
           kind: "length",
@@ -331,6 +343,7 @@ export class AgentRunner {
         return content;
       }
       if (finishReason === "content_filter") {
+        backfillStrandedCalls(); // keep session.messages 400-safe if filtered mid-tool_calls
         await this.emit({ type: "run.error", kind: "content_filter", userMessage: "I can't help with that part.", recoverable: false });
         return content;
       }
