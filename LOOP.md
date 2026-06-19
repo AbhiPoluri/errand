@@ -73,11 +73,6 @@ it under needs-attended/needs-user instead of the safe Backlog.
 _(Queued by the 2026-06-19 Discovery pass — 4 parallel scouts across the codebase, each candidate
 triaged. Work top-down; re-run Discovery when this empties again.)_
 
-- [ ] **(high) Add `mcpconfig:test` for the MCP-server config parser/sanitizer** (`src/server/mcp/
-  config.ts` `loadMcpServers`/`saveMcpServers`, untested). Lock: malformed/non-array JSON → `[]` (no
-  throw); entries missing `id`/`command`/`label` dropped; `args` coerced string-only; non-object `env`
-  dropped; `enabled` defaults true via `!== false`; save→load round-trip. Use the `ERRAND_DB` temp-DB
-  pattern (memtest/storetest). Purely additive. Verify: new `mcpconfig:test` + tsc + full suite.
 - [ ] **(high) Fix the stuck approval card** (`app/lib/useRun.ts` `decide`): it fires the POST but never
   reads the response and only clears the amber permission card on the server's `approval.resolved` SSE.
   When `runRegistry.decide()` returns false (approval already resolved/expired, run evicted) the route
@@ -133,6 +128,10 @@ triaged. Work top-down; re-run Discovery when this empties again.)_
 
 ## Done log (newest first)
 
+- 2026-06-19 — `mcpconfig:test` (from Discovery #1). Locked loadMcpServers/saveMcpServers sanitization
+  (17 assertions: malformed/non-array JSON → [] no throw, bad entries dropped, args string-only, env
+  object-only, enabled defaults true via !==false, round-trip). Isolated ERRAND_DB, offline. tsc clean;
+  24 offline suites green. `f0a7d64`.
 - 2026-06-19 — Lock the bash catastrophic-command denylist (from Discovery #1). `run_command`'s DENY
   gate (the highest-stakes runtime safety check) had no test — only the output cap did. Exported
   `DENY`+`SHELL_META` and added 27 assertions: 12 catastrophic strings match, 9 benign don't (incl. the
