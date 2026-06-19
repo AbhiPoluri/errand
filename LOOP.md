@@ -1,5 +1,10 @@
 # Errand — Autonomous Loop Queue
 
+> ## ⛔ LOOP STOPPED — paused by the user 2026-06-19 (~01:25)
+> If you are an iteration that just woke up from a stale scheduled wakeup: **the user STOPPED the loop.**
+> Do NOT pick, plan, or run any task. Just note the loop is stopped and end the turn — schedule no new
+> wakeup. To resume, the user re-runs `/loop`; remove this banner when they do.
+
 This is the working queue + rulebook for the self-driving dev loop (run via `/loop`). It is the
 loop's MEMORY: each iteration reads it to decide what to do next, and updates it when done. Full
 history/detail lives in `PLAN.md` §11 and `HANDOFF.md`; this file is just the actionable queue.
