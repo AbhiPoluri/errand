@@ -18,12 +18,19 @@ follow-on. Phased plan:
   adversarial review → seq lens cleared all 5 attack scenarios; HIGH (Stop lost for a queued turn) +
   LOW (reconcile seq cursor under corrupt rows) fixed. **All 19 offline suites pass** (+2 new:
   `migrate:test`, `seq:test`); migration verified on a copy of the live 56MB DB. See PLAN §11 (top).
-- **Phase 1 — NEXT: agent-core extraction.** Module-init side effects (`store` DB-open,
-  `reconcileOrphans`, MCP `configure`) → an explicit `bootstrap()`; drop the `globalThis` singletons;
-  route every fs path (`errand.db`, workspace, skills, logs, tesseract cache, Chrome profiles) through
-  env overrides toward `userData`; missing `OPENROUTER_API_KEY` → a calm runtime error, not an
-  import-time throw. The shared prerequisite for the wrap.
-- **Phase 2 — Electron wrap.** main + a utility process for the core; `app.whenReady` boot sequence;
+- **Phase 1 — agent-core extraction: DONE (commits `535cf95` + `ff99604`).** (1a) new `src/paths.ts`
+  centralizes every app-data path behind `specific-override > ERRAND_DATA > cwd/home`, read lazily;
+  `store`/`log`/`extract`/`browser`/`skills`/`config` route through it, so a host relocates ALL data to
+  `userData` with one env var. `config.ts` no longer throws on a missing `OPENROUTER_API_KEY` at import
+  (soft read + `hasApiKey()`; `preflightEndpoint()` gives a calm run-start message). (1b) the two
+  module-init side effects (reconcile + MCP configure) extracted into a named idempotent `bootstrap()`
+  the host owns; added `shutdown()` (releases MCP children + Playwright Chrome — was orphaning on quit),
+  wired to dev-server signals and ready for Electron `before-quit`. Verified: 20/20 offline suites +1
+  new (`paths:test`) + a live `next dev` smoke test (fresh DB materialized at the relocated path, real
+  errand.db untouched). NB the `globalThis` singletons STAY for now (Next HMR needs them); the
+  plain-singleton swap + the instrumentation.ts trigger are Phase-2 (Electron, where there's no HMR).
+- **Phase 2 — NEXT: Electron wrap.** main + a utility process for the core; `app.whenReady` boot
+  sequence (set ERRAND_DATA + key, import core, call `bootstrap()`);
   single-instance lock; before-quit cleanup (MCP children + Playwright); bundled Next server on a fixed
   loopback port (extension keeps working); `safeStorage` for the key; electron-builder + notarize.
 - **Phase 3 — resume follow-on.** `turn_state` checkpoint + `AgentRunner.resume()` + re-park parked
