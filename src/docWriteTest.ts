@@ -143,6 +143,13 @@ async function testHardening() {
   check("rejects content over the size cap", !big.ok);
   check("nothing written for oversized content", !existsSync(join(root, "big.docx")));
 
+  // (4) Empty / whitespace-only content is refused — no blank docx or 1×1 empty-cell xlsx "saved".
+  const emptyX = await saveAsDocument.run({ path: join(root, "empty"), kind: "xlsx", content: "   \n  " }, ctxFor(root, new Journal()));
+  check("rejects whitespace-only xlsx content", !emptyX.ok && (emptyX as any).error === "empty", JSON.stringify(emptyX));
+  const emptyD = await saveAsDocument.run({ path: join(root, "empty"), kind: "docx", content: "" }, ctxFor(root, new Journal()));
+  check("rejects empty docx content", !emptyD.ok && (emptyD as any).error === "empty");
+  check("nothing written for empty content", !existsSync(join(root, "empty.xlsx")) && !existsSync(join(root, "empty.docx")));
+
   rmSync(root, { recursive: true, force: true });
 }
 

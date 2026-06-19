@@ -49,6 +49,11 @@ export const saveAsDocument: Tool<{ path: string; kind: "docx" | "xlsx"; content
     r.ok ? `Saved ${name(r.data?.path ?? "the document")}.` : (r.summary ?? "I couldn't save that document."),
   run: async (a, ctx): Promise<ToolResult<{ path: string; kind: string; bytes: number }>> => {
     try {
+      // Empty/whitespace-only content would silently produce a blank .docx or a 1×1 one-empty-cell
+      // .xlsx, both reported as "Saved." — never what the user meant. Ask for content instead.
+      if (!a.content.trim()) {
+        return { ok: false, error: "empty", summary: "There's nothing to save — give me the text (for a Word doc) or rows (for a spreadsheet)." };
+      }
       // Cap input size BEFORE building — xlsx amplifies each cell ~30×+ into in-memory XML, so a huge
       // content string could OOM. Every other file path caps at MAX_FILE_BYTES; this write path must too.
       if (Buffer.byteLength(a.content) > MAX_FILE_BYTES) {
