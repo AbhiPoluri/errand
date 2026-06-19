@@ -26,6 +26,7 @@ const PORT = 3200;
 
 let serverProc = null;
 let win = null;
+let quitting = false; // set on before-quit so a restart-in-progress can't spawn a server during shutdown
 
 // node:sqlite WAL allows exactly one writer; a second app instance would contend on errand.db. Refuse
 // to start a second instance and focus the existing window instead.
@@ -59,6 +60,47 @@ function loadApiKey() {
   return process.env.OPENROUTER_API_KEY || "";
 }
 
+// Encrypt + persist a new key to the same keychain-backed blob loadApiKey() reads. Called from the
+// core server (over the utility-process channel) when the user enters a key in Settings — the
+// renderer never handles the encrypted bytes, and the key is never written in plaintext.
+function saveApiKey(key) {
+  const trimmed = (key || "").trim();
+  if (!trimmed) return false;
+  if (!safeStorage.isEncryptionAvailable()) {
+    console.warn("[errand] safeStorage unavailable — cannot persist the key");
+    return false;
+  }
+  const dir = userDataDir();
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "openrouter.key"), safeStorage.encryptString(trimmed), { mode: 0o600 });
+  return true;
+}
+
+// Restart the core server so the next loadApiKey() injection picks up a changed key/config. CRITICAL:
+// wait for the old process to EXIT (and release port 3200) before re-forking — forking immediately
+// races the OS releasing the listener socket and can fail to bind (EADDRINUSE), leaving no backend.
+// `go` runs startServer exactly once, and never while the app is quitting (so a kill-on-quit can't
+// spawn a fresh server during shutdown).
+function restartServer() {
+  const old = serverProc;
+  if (!old) {
+    startServer();
+    return;
+  }
+  let done = false;
+  const go = () => {
+    if (done || quitting) return;
+    done = true;
+    startServer();
+  };
+  old.once("exit", go);
+  try {
+    old.kill();
+  } catch {
+    go(); // already dead — no exit event coming
+  }
+}
+
 // The standalone server entry. Unpackaged (dev): in the repo's .next. Packaged: unpacked from the asar
 // under resources/ (electron-builder asarUnpack — see package.json build config in Phase 2c).
 function serverEntry() {
@@ -90,6 +132,18 @@ function startServer() {
   serverProc.on("exit", (code) => {
     console.log(`[errand] core server exited (code ${code})`);
     serverProc = null;
+  });
+  // The core server (utility process) forwards a Settings key-entry here, where safeStorage lives.
+  // INVARIANT: this listener MUST be registered inside startServer so every fork (boot + each
+  // restart) gets it on the new UtilityProcess — moving it to a one-time boot registration would
+  // silently break set-key after the first restart.
+  serverProc.on("message", (msg) => {
+    if (msg && msg.type === "errand:set-key" && typeof msg.key === "string") {
+      if (saveApiKey(msg.key)) {
+        console.log("[errand] stored a new API key from Settings; restarting the core to apply it");
+        restartServer();
+      }
+    }
   });
 }
 
@@ -158,6 +212,7 @@ app.on("window-all-closed", () => {
 // (runRegistry, Phase 1b) catches to close MCP stdio children + the Playwright Chrome context so
 // nothing orphans after the user quits.
 app.on("before-quit", () => {
+  quitting = true; // so a mid-restart exit handler doesn't re-spawn the server during shutdown
   if (serverProc) {
     try {
       serverProc.kill();

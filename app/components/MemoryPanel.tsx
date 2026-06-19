@@ -25,6 +25,12 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
   const [vision, setVision] = useState(true);
   const [modelCanSee, setModelCanSee] = useState(false);
   const [browserTrusted, setBrowserTrusted] = useState(true);
+  // OpenRouter API key (desktop app only — safeStorage lives in the Electron main process).
+  const [keyConfigured, setKeyConfigured] = useState<boolean | null>(null);
+  const [keyDesktop, setKeyDesktop] = useState(false);
+  const [keyInput, setKeyInput] = useState("");
+  const [savingKey, setSavingKey] = useState(false);
+  const [keyMsg, setKeyMsg] = useState<string | null>(null);
   const [ollamaUrl, setOllamaUrl] = useState("");
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [savingUrl, setSavingUrl] = useState(false);
@@ -88,6 +94,13 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
         setVision(d.vision !== false);
         setModelCanSee(!!d.modelCanSee);
         setBrowserTrusted(d.browserTrusted !== false);
+      })
+      .catch(() => {});
+    fetch("/api/key")
+      .then((r) => r.json())
+      .then((d) => {
+        setKeyConfigured(!!d.configured);
+        setKeyDesktop(!!d.desktop);
       })
       .catch(() => {});
   };
@@ -272,6 +285,34 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
     }).catch(() => {});
   };
 
+  // Store a new OpenRouter key (desktop app). The server hands it to the Electron main process, which
+  // encrypts it into the keychain and restarts the core — so the page briefly reconnects after.
+  const saveKey = async () => {
+    const key = keyInput.trim();
+    if (!key || savingKey) return;
+    setSavingKey(true);
+    setKeyMsg(null);
+    try {
+      const res = await fetch("/api/key", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (d.ok) {
+        setKeyInput("");
+        setKeyConfigured(true);
+        setKeyMsg("Saved — applying it now (the app will reconnect in a moment).");
+      } else {
+        setKeyMsg(d.error || "Couldn't save the key.");
+      }
+    } catch {
+      setKeyMsg("Couldn't save the key.");
+    } finally {
+      setSavingKey(false);
+    }
+  };
+
   return (
     <AnimatePresence>
       {open && (
@@ -305,6 +346,35 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
             {/* Everything below the pinned header scrolls as one — otherwise the upper sections
                 (Model / What Errand can do / Dreaming) clip when they're taller than the modal. */}
             <div className="min-h-0 flex-1 overflow-y-auto">
+            {/* OpenRouter API key — desktop app only (safeStorage is main-process; web uses .env) */}
+            {keyDesktop && (
+              <div className="border-b border-stone-100 px-6 py-4">
+                <p className="text-sm font-medium text-stone-900">OpenRouter API key</p>
+                <p className="mt-0.5 text-[13px] leading-relaxed text-stone-500">
+                  {keyConfigured
+                    ? "A key is set — stored encrypted in your keychain. Enter a new one to replace it."
+                    : "Errand needs your OpenRouter key to use the cloud model. It's stored encrypted in your keychain, never in plain text."}
+                </p>
+                <div className="mt-2.5 flex gap-2">
+                  <input
+                    type="password"
+                    value={keyInput}
+                    onChange={(e) => setKeyInput(e.target.value)}
+                    placeholder={keyConfigured ? "Enter a new key to replace" : "sk-or-…"}
+                    className="min-w-0 flex-1 rounded-lg border border-stone-200 bg-white px-3 py-2 font-mono text-[12px] text-stone-800 outline-none transition focus:border-accent-600/50"
+                  />
+                  <button
+                    onClick={saveKey}
+                    disabled={savingKey || !keyInput.trim()}
+                    className="shrink-0 rounded-lg bg-accent-600 px-3 py-2 text-[13px] font-medium text-white transition hover:opacity-90 active:scale-95 disabled:opacity-50"
+                  >
+                    {savingKey ? "Saving…" : "Save"}
+                  </button>
+                </div>
+                {keyMsg && <p className="mt-1.5 text-[12px] text-stone-500">{keyMsg}</p>}
+              </div>
+            )}
+
             {/* model + endpoint switcher */}
             <div className="border-b border-stone-100 px-6 py-4">
               <p className="text-sm font-medium text-stone-900">Model</p>
