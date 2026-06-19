@@ -6,7 +6,7 @@
 // commit (orders, sending, accepting terms, mailbox actions, advancing a flow), not generic words
 // that would gate benign navigation.
 export const RISKY =
-  /(^|\b)(send|delete|remove|unsubscribe|buy|purchase|pay|checkout|place order|place your order|order now|confirm|submit|publish|post|trash|deactivate|sign out|log out|report spam|discard|move to trash|continue|proceed|accept|agree|add to cart|subscribe|reply|forward|archive|block|mute)(\b|$)/i;
+  /(^|\b)(send|delete|remove|unsubscribe|buy|purchase|pay|checkout|place order|place your order|order now|confirm|submit|publish|post|trash|deactivate|sign out|log out|report spam|discard|move to trash|continue|proceed|accept|agree|add to cart|subscribe|reply|forward|archive|block|mute|withdraw|transfer|wire)(\b|$)/i;
 
 // Element kinds that are inherently navigation/disclosure — safe to click even without a label.
 const BENIGN_KINDS = new Set(["a", "summary", "details"]);

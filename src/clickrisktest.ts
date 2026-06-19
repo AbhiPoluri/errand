@@ -14,6 +14,13 @@ for (const l of ["Continue", "Place your order", "Accept", "I agree", "Add to ca
   check(`"${l}" is risky`, classifyClickRisk(l, "button") === true);
 }
 
+console.log("\n== money-movement commits are RISKY (never auto-fire on a logged-in bank) ==");
+for (const l of ["Withdraw", "Transfer", "Wire transfer", "Transfer funds", "Withdraw all"]) {
+  check(`"${l}" is risky`, classifyClickRisk(l, "button") === true);
+}
+// Guard against over-broadening: a benign word that merely CONTAINS "wire" must stay benign.
+check('"Wired" (no word boundary) stays benign', classifyClickRisk("Wired", "a") === false);
+
 console.log("\n== unlabeled non-navigation elements default RISKY ==");
 check("unlabeled button is risky", classifyClickRisk(undefined, "button") === true);
 check("empty-label button is risky", classifyClickRisk("", "button") === true);
