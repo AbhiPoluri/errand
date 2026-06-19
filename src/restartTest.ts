@@ -51,6 +51,15 @@ async function main(): Promise<void> {
   store.createRun("done", "Done run", 1, ["/tmp"]);
   store.setStatus("done", "done");
 
+  // Mid-turn checkpoints: a zombie (midtask) and the live run both have one. Reconcile must DROP the
+  // zombie's (so it can't be resumed from a stale turn_state) and LEAVE the live run's alone.
+  const cp = () => ({
+    turnId: "t", phase: "executing_tools", iteration: 0, callCursor: 0, pendingCallId: null,
+    messages: [], callCounts: {}, autoApproveReversible: false, maxEmittedSeq: 0,
+  });
+  store.saveTurnState("midtask", cp());
+  store.saveTurnState("live", cp());
+
   const n = store.reconcileOrphans(new Set(["live"]));
   check(`reconciled exactly 2 orphans (parked + midtask), live skipped (got ${n})`, n === 2);
 
@@ -59,6 +68,8 @@ async function main(): Promise<void> {
   check("midtask → stopped", status("midtask") === "stopped");
   check("live untouched (still working)", status("live") === "working");
   check("done untouched (still done)", status("done") === "done");
+  check("reconcile DROPPED the zombie's turn_state", store.getTurnState("midtask") === null);
+  check("reconcile LEFT the live run's turn_state", store.getTurnState("live") !== null);
 
   // Parked run: its approval was resolved to cancelled, then a terminal interrupted event added.
   const pe = store.getEvents("parked");

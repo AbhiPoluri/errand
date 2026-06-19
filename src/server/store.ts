@@ -425,6 +425,10 @@ export function reconcileOrphans(liveIds: Set<string> = new Set()): number {
         recoverable: true,
       });
       setStatus(runId, "stopped");
+      // Drop the zombie's mid-turn checkpoint atomically with settling it: this run is now 'stopped'
+      // and must NOT be resumed from a stale turn_state. (Resume safety — see the Phase 3b review;
+      // the resume consumer will also ignore any turn_state whose run isn't actively 'working'.)
+      clearTurnState(runId);
     });
   }
   return orphans.length;
