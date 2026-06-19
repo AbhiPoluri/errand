@@ -13,6 +13,11 @@ const path = require("node:path");
 const fs = require("node:fs");
 const net = require("node:net");
 
+// Identify as "Errand", not "Electron" — sets the macOS app menu name (in a packaged build the bundle
+// name does this; this also covers the dev `npm run app` run) and routes app.getPath('userData') to
+// ~/Library/Application Support/Errand. Must run before the app is ready / any getPath call.
+app.setName("Errand");
+
 // The extension targets localhost:3200 (extension/manifest.json + background.js), so the packaged app
 // binds the SAME port to keep it working unchanged. Consequence: you can't run `next dev` (also 3200)
 // and the app at once — the single-instance lock + this shared port make that explicit.
