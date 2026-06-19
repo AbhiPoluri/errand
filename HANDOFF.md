@@ -29,10 +29,14 @@ follow-on. Phased plan:
   new (`paths:test`) + a live `next dev` smoke test (fresh DB materialized at the relocated path, real
   errand.db untouched). NB the `globalThis` singletons STAY for now (Next HMR needs them); the
   plain-singleton swap + the instrumentation.ts trigger are Phase-2 (Electron, where there's no HMR).
-- **Phase 2 — NEXT: Electron wrap.** main + a utility process for the core; `app.whenReady` boot
-  sequence (set ERRAND_DATA + key, import core, call `bootstrap()`);
-  single-instance lock; before-quit cleanup (MCP children + Playwright); bundled Next server on a fixed
-  loopback port (extension keeps working); `safeStorage` for the key; electron-builder + notarize.
+- **Phase 2 — NEXT: Electron wrap. macOS-only for the first build (user's call 2026-06-18 — browser.ts's
+  Chrome /Applications paths + the `open -na` sign-in spawn are already mac-specific; cross-platform is a
+  separate effort).** main + a utility process for the core; `app.whenReady` boot sequence (set
+  ERRAND_DATA + key, import core, call `bootstrap()`); single-instance lock; before-quit cleanup (MCP
+  children + Playwright via `shutdown()`); bundled Next server on a fixed loopback port (extension keeps
+  working); `safeStorage` for the key; `output:'standalone'` + electron-builder + notarize. ⚠️ Pin an
+  Electron release whose bundled Node has `node:sqlite` (Node 22.5+/24) or store.ts dies at import.
+  ⚠️ USER PAUSED HERE 2026-06-18 to review Phases 0–1 before starting the heavier Electron packaging.
 - **Phase 3 — resume follow-on.** `turn_state` checkpoint + `AgentRunner.resume()` + re-park parked
   approvals + `tool_inflight` uncertain-markers; **includes the deferred journal-manifest-before-mutate
   fix** (it pairs with the in-flight markers). Now testable against a stable single process.
