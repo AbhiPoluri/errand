@@ -9,7 +9,11 @@ history/detail lives in `PLAN.md` §11 and `HANDOFF.md`; this file is just the a
 1. `cd ~/agent-harness`. Confirm the branch is `durability-electron` and the tree is clean
    (`git status`). If the tree is dirty from a half-done iteration, finish or revert it first.
 2. Read this file's **Backlog** + the **Guardrails** below, and skim `HANDOFF.md`.
-3. Pick the SINGLE highest-priority **unblocked, autonomously-safe** task (top of the Backlog).
+3. **Pick or discover a task.** If the Backlog has an unblocked, autonomously-safe item, take the
+   SINGLE highest-priority one (top). **If the Backlog has no such item** (empty, or only
+   needs-user/needs-attended remain), run the **Discovery pass** (see the section below) to surface
+   real, concrete, autonomously-safe work, add it to the Backlog correctly prioritized, then take the
+   top one. Only if Discovery genuinely turns up nothing real do you stop (report it + do nothing).
 4. **Plan** it briefly (a few bullets in your reply — what files, what approach, what test).
 5. **Implement** it, following the repo's conventions (TypeScript strict; a `*:test` tsx script for
    new logic; comments that match the surrounding density).
@@ -38,15 +42,38 @@ history/detail lives in `PLAN.md` §11 and `HANDOFF.md`; this file is just the a
   the extension connection).
 - **Green or reverted.** Every iteration ends with `tsc` clean + the offline suite green + a clean
   committed tree. If you can't get there, revert your changes and tag the task `[blocked: <reason>]`.
-- **If no safe, unblocked task remains, STOP** and say so — don't invent busywork or refactor for its
-  own sake.
+- **When the Backlog runs dry, DISCOVER — don't idle.** Run the Discovery pass to find new real work.
+  Stop and report only if Discovery genuinely surfaces nothing concrete and safe. **Quality bar still
+  holds: never invent busywork or refactor for its own sake** — a discovered task must be a real
+  improvement (a genuine bug, a real coverage/edge-case gap, a concrete reliability/UX win), not churn.
 - When unsure whether something is safe to do autonomously, treat it as `[needs-user]` and skip it.
+
+## Discovery pass (how to find new work when the Backlog is dry)
+
+Goal: surface REAL, concrete, autonomously-safe tasks — never manufacture churn. Prefer a focused
+review **Workflow** that fans out across the codebase looking for, in rough priority order:
+1. **Genuine bugs / latent races / unhandled edge cases** — especially in code that can't be unit-run
+   (electron, extension) or in error paths.
+2. **Coverage gaps** — modules with real logic but no `*:test`, or a tested module missing an important
+   case. Adding a test that documents/locks current behavior counts.
+3. **Code↔comment/doc drift** — a comment or HANDOFF/PLAN claim that the code no longer matches.
+4. **Concrete reliability or UX polish** — a silent-failure path, a confusing message, a small
+   consumer-facing rough edge with a clear fix.
+5. **Footguns / dead code with a concrete payoff** — not style nits.
+
+Each discovered task MUST be: **concrete** (names the file + the behavior), **autonomously-safe** (no
+secrets/accounts/signing/OAuth/main/destructive), **verifiable** (tsc + a `*:test` or a runnable
+check), and **small** (one iteration). Add each to the Backlog with a one-line rationale; work the top
+one this iteration and leave the rest queued. **De-dupe against the Done log** so finished work isn't
+re-done and previously-rejected ideas don't reappear. If a candidate is risky or needs the user, file
+it under needs-attended/needs-user instead of the safe Backlog.
 
 ## Backlog (priority order — work the top unblocked item)
 
-_(empty — no autonomously-safe tasks queued. The next heartbeat should report "no safe task remains"
-and do nothing. The remaining work is all needs-attended / needs-user below; add new safe tasks here
-as they're discovered. Consider pausing the heartbeat — see "Cron heartbeat" note at the bottom.)_
+_(empty — so the next heartbeat runs the **Discovery pass** (see the section above the Backlog): it
+scans for real, concrete, autonomously-safe work, queues it here, and works the top one. The loop no
+longer idles on an empty backlog; it only stops if Discovery genuinely finds nothing real. Remaining
+non-safe work is under needs-attended / needs-user below.)_
 
 ## Blocked — needs the user / attended (DO NOT attempt unattended in the loop)
 
@@ -125,10 +152,11 @@ as they're discovered. Consider pausing the heartbeat — see "Cron heartbeat" n
 ## Cron heartbeat (what drives this loop)
 
 A **session-only** cron (`CronCreate`, `durable:false`) fires the HEARTBEAT prompt every 10 min while
-the REPL is idle. As of 2026-06-19 the live job is `4461c404` (`7,17,...,57 * * * *`); it replaced the
-prior `ef511639`, which had gone zombie (listed but not firing) after the session it was created in
-ended. **Session-only = dies when Claude closes; recreate it next session** (or use `durable:true` to
+the REPL is idle. As of 2026-06-19 the live job is `16adc4c3` (`7,17,...,57 * * * *`); it replaced
+`4461c404` (reprompted when Discovery was added) and the original `ef511639` (gone zombie — listed but
+not firing after its session ended). **Session-only = dies when Claude closes; recreate it next session** (or use `durable:true` to
 persist across restarts — the user declined that on 2026-06-19, preferring session-only). Auto-expires
-after 7 days regardless. **With the backlog empty, each fire just no-ops** — pause it with
-`CronDelete 4461c404` until there's safe work queued again.
+after 7 days regardless. **An empty backlog no longer means no-op** — each fire runs the Discovery
+pass to find and work new safe tasks (see "Discovery pass" above). To pause the loop entirely, add a
+STOP banner at the top of this file or `CronDelete 16adc4c3`.
 </content>
