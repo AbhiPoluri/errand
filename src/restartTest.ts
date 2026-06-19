@@ -152,7 +152,41 @@ async function main(): Promise<void> {
   check("corrupt move manifest -> no inverse", reconstructInverse({ manifest: { kind: "move" } as any }) === undefined);
   check("corrupt copy manifest -> no inverse", reconstructInverse({ manifest: { kind: "copy" } as any }) === undefined);
   check("corrupt write manifest -> no inverse", reconstructInverse({ manifest: { kind: "write", wasNew: true } as any }) === undefined);
+  check("corrupt make_folder manifest -> no inverse", reconstructInverse({ manifest: { kind: "make_folder" } as any }) === undefined);
+  check("corrupt delete manifest -> no inverse", reconstructInverse({ manifest: { kind: "delete" } as any }) === undefined);
   check("valid move manifest -> has a real inverse", typeof reconstructInverse({ manifest: { kind: "move", from: "/a", to: "/b" } }) === "function");
+
+  // ---- copy + make_folder reconstructed inverses RUN correctly (the restart-Undo fallback the
+  //      end-to-end section above never exercises — it only does move/write/delete/rename) ----
+  console.log("\n-- copy + make_folder reconstructed inverses --");
+  const rdir = mkdtempSync(join(tmpdir(), "errand-reconstruct-"));
+
+  // copy: the inverse removes the copied file.
+  const copied = join(rdir, "copied.txt");
+  writeFileSync(copied, "A COPY");
+  const copyInv = reconstructInverse({ manifest: { kind: "copy", to: copied } });
+  check("copy manifest -> has an inverse", typeof copyInv === "function");
+  await copyInv!();
+  check("copy inverse removed the copied file", !existsSync(copied));
+
+  // make_folder: removes an EMPTY created folder…
+  const emptyDir = join(rdir, "empty-made");
+  mkdirSync(emptyDir);
+  const mfInv = reconstructInverse({ manifest: { kind: "make_folder", path: emptyDir } });
+  check("make_folder manifest -> has an inverse", typeof mfInv === "function");
+  await mfInv!();
+  check("make_folder inverse removed the empty created folder", !existsSync(emptyDir));
+
+  // …but LEAVES a folder the user has since filled — the load-bearing safety guard (never delete a
+  // folder that now holds the user's data, even though make_folder created it).
+  const filledDir = join(rdir, "filled-made");
+  mkdirSync(filledDir);
+  const userFile = join(filledDir, "user-put-this-here.txt");
+  writeFileSync(userFile, "USER DATA");
+  await reconstructInverse({ manifest: { kind: "make_folder", path: filledDir } })!();
+  check("make_folder inverse LEAVES a folder the user filled", existsSync(filledDir) && existsSync(userFile));
+
+  rmSync(rdir, { recursive: true, force: true });
 
   // ---- undoRun() on a run NOT in memory rehydrates + rebuilds instead of 404ing ----
   console.log("\n-- undoRun on an out-of-memory run --");
