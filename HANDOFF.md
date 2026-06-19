@@ -21,7 +21,7 @@ dreaming**. **NEW this session: it's also a macOS desktop app (Electron).**
 A cron **heartbeat (`ef511639`, every 10 min, session-only)** drives the dev loop. When it fires, the
 prompt tells you to `cd ~/agent-harness`, read `LOOP.md`, and run ONE iteration of its cycle (pick the
 top unblocked + autonomously-safe task → plan → implement w/ tests → adversarially review → fix → keep
-tsc + the 22 offline suites green (revert if not) → commit on `durability-electron` → update LOOP.md →
+tsc + the 26 offline suites green (revert if not) → commit on `durability-electron` → update LOOP.md →
 report). If `LOOP.md` shows a STOP banner at the top, do nothing. The heartbeat keeps firing across a
 `/clear` (same process) but **dies when Claude is closed** — to resume the loop in a fresh Claude
 session, re-run `/loop` or create a new heartbeat. To stop it now: `CronDelete ef511639`.
@@ -92,9 +92,9 @@ session, re-run `/loop` or create a new heartbeat. To stop it now: `CronDelete e
 ## Resume / verify quickly
 - `npm run app` (desktop) or `npm run web` → http://localhost:3200. Extension loaded (green dot) for
   browser tasks. ⚠️ can't run the packaged app and `next dev` at once (both want 3200).
-- **22 offline test suites** (all green): `npm run X:test` for X in: migrate seq paths folders resume loop
-  web fileops journal embed store websink ext bash clickrisk restart cap endpoint zip docwrite mcp skill.
-  (`mem`/`doc`/`ocr` need the OpenRouter key / are slow.) `npx tsc --noEmit` clean.
+- **26 offline test suites** (all green): `npm run X:test` for X in: migrate seq paths folders resume loop
+  web fileops journal embed store websink ext bash clickrisk restart cap endpoint zip docwrite mcp mcpconfig
+  skill models userun runroute. (`mem`/`doc`/`ocr` need the OpenRouter key / are slow.) `npx tsc --noEmit` clean.
 - The OpenRouter key is set (safeStorage blob at `~/Library/Application Support/Errand/openrouter.key`).
 
 ## Gotchas (will bite you)
