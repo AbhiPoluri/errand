@@ -73,13 +73,6 @@ it under needs-attended/needs-user instead of the safe Backlog.
 _(Queued by the 2026-06-19 Discovery pass — 4 parallel scouts across the codebase, each candidate
 triaged. Work top-down; re-run Discovery when this empties again.)_
 
-- [ ] **(high) Fix the stuck approval card** (`app/lib/useRun.ts` `decide`): it fires the POST but never
-  reads the response and only clears the amber permission card on the server's `approval.resolved` SSE.
-  When `runRegistry.decide()` returns false (approval already resolved/expired, run evicted) the route
-  still answers 200 and no `resolved` event fires → the card wedges forever on the app's most
-  trust-critical surface. Await the POST, and on `ok:false`/throw clear the parked approval + surface a
-  calm "that request expired" on the turn. Pairs with the route-code task below. Verify: tsc + reducer
-  reasoning (extract the failure step for a small assertion if practical).
 - [ ] **(med) MCP onClose idempotency** (`src/server/mcp/client.ts:67`): `onClose` runs fully on every
   transport close; the over-long-line path in `transport.ts` fires close twice, so the 2nd overwrites
   `closeErr` with a generic message and re-fires `onDisconnect`, masking the real reason. Add
@@ -94,8 +87,9 @@ triaged. Work top-down; re-run Discovery when this empties again.)_
   decision}/route.ts`): these return 200 `{ok:false}` when the run is gone, while sibling `/message` +
   `/undo` correctly return 404. Return 404 on a missing run to match; narrow `decision`'s accepted set to
   the user-submittable decisions (`approved`/`denied`/`approved_always`) so an open client can't inject
-  `cancelled`/`expired`. Pairs with the stuck-card fix. Verify: tsc + reasoning (small route unit test if
-  practical).
+  `cancelled`/`expired`. (The client now degrades gracefully on a 200 `{ok:false}` via the stuck-card
+  fix, so this is now a contract-cleanliness + input-tightening task, not load-bearing.) Verify: tsc +
+  reasoning (small route unit test if practical).
 - [ ] **(med) Fix HANDOFF offline-suite drift** (`HANDOFF.md:24,95-97`): says "22 offline test suites"
   and omits `models` from the list; reality is 23 (models added this session; LOOP's recent Done entries
   already say 23). Update the count + list. Docs-only.
@@ -128,6 +122,13 @@ triaged. Work top-down; re-run Discovery when this empties again.)_
 
 ## Done log (newest first)
 
+- 2026-06-19 — Fix the stuck approval card (from Discovery #1). `decide()` never read the decision
+  POST and only cleared the amber card on the `approval.resolved` SSE — so when `runRegistry.decide()`
+  returned false (run evicted/restarted, or approval expired server-side) the card wedged forever on
+  the app's most trust-critical surface. Now awaits the POST and on not-ok clears the card + shows a
+  calm "ask me again" snag via the new pure `resolveApprovalFailure` helper (guarded against clobbering
+  a fresh approval / firing on success). New `userun:test` (8 assertions). Adversarial review: no
+  correctness defects. tsc clean; 26 offline suites green. `5292976`.
 - 2026-06-19 — `mcpconfig:test` (from Discovery #1). Locked loadMcpServers/saveMcpServers sanitization
   (17 assertions: malformed/non-array JSON → [] no throw, bad entries dropped, args string-only, env
   object-only, enabled defaults true via !==false, round-trip). Isolated ERRAND_DB, offline. tsc clean;
