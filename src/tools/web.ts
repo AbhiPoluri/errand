@@ -142,6 +142,10 @@ export const webSearch: Tool<{ query: string }, { results: SearchResult[] }> = {
         body: new URLSearchParams({ q: a.query }).toString(),
         signal: withDeadline(ctx.signal),
       });
+      // A rate-limit / 5xx returns an error page with no result rows, which would otherwise parse to
+      // zero results and be reported as "no_results" — telling the model the topic has no web presence
+      // when the request was actually blocked. Distinguish it like web_fetch does.
+      if (!res.ok) return { ok: false, error: `http_${res.status}`, summary: "I couldn't search just now." };
       const html = await readCapped(res);
       const results = parseDdgResults(html);
       if (results.length === 0) return { ok: false, error: "no_results", summary: "I couldn't find anything for that." };

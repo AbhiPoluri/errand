@@ -86,5 +86,23 @@ check("system prompt asks the model to name which site a web answer came from", 
 check("prompt forbids answering from memory when a page won't open", /don't answer the question from your own memory/.test(SYSTEM_PROMPT));
 check("web_fetch description warns against guessing on failure", /don't fall back to answering from your own memory/.test(webFetch.modelDescription));
 
+console.log("\n== web_search run() distinguishes a blocked request from no results ==");
+const realFetch = globalThis.fetch;
+try {
+  // A rate-limit / server error must NOT be reported as "no results" — that would tell the model the
+  // topic has no web presence when the request was actually blocked.
+  globalThis.fetch = (async () => ({ ok: false, status: 429, text: async () => "" })) as unknown as typeof fetch;
+  const blocked = await webSearch.run({ query: "anything" }, { signal: new AbortController().signal } as any);
+  check("HTTP 429 -> ok:false", blocked.ok === false, JSON.stringify(blocked));
+  check("HTTP 429 -> error http_429, not no_results", !blocked.ok && (blocked as any).error === "http_429", (blocked as any).error);
+
+  // A real 200 with no matching rows still means no_results.
+  globalThis.fetch = (async () => ({ ok: true, status: 200, text: async () => "<html></html>" })) as unknown as typeof fetch;
+  const empty = await webSearch.run({ query: "anything" }, { signal: new AbortController().signal } as any);
+  check("HTTP 200 empty body -> no_results", !empty.ok && (empty as any).error === "no_results", JSON.stringify(empty));
+} finally {
+  globalThis.fetch = realFetch;
+}
+
 console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILED"}`);
 process.exit(failures === 0 ? 0 : 1);
