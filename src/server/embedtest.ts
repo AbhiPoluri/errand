@@ -74,6 +74,37 @@ async function testEmbedManyRemap() {
   check("gamma@4 mapped correctly (no drift despite shuffled rows)", JSON.stringify(out[4]) === "[3]", JSON.stringify(out[4]));
 }
 
+async function testEmbedManyOutOfRangeIndex() {
+  console.log("\n== embedMany() ignores an out-of-range index without drift or throw ==");
+  // A malformed `index` (out of range of the sent batch) must be dropped by the `if (slot && …)`
+  // guard — never throw, never corrupt another row's slot.
+  const s = stub(() => ({
+    data: [
+      { index: 99, embedding: [9] }, // garbage -> live[99] undefined -> dropped
+      { index: 1, embedding: [2] },
+      { index: 2, embedding: [3] },
+    ],
+  }));
+  _setEmbedClient(s.client);
+  const out = await embedMany(["alpha", "beta", "gamma"]);
+  _setEmbedClient(null);
+  check("3-length result, no throw", out.length === 3);
+  check("out-of-range row dropped (its slot stays null)", out[0] === null, JSON.stringify(out[0]));
+  check("the other rows still map correctly (no drift)", JSON.stringify(out[1]) === "[2]" && JSON.stringify(out[2]) === "[3]");
+}
+
+async function testEmbedManyMissingIndex() {
+  console.log("\n== embedMany() falls back to positional order when index is absent ==");
+  // A server that omits `index` -> embedMany uses the row's positional `i` (the `?? i` fallback).
+  const s = stub(() => ({ data: [{ embedding: [1] }, { embedding: [2] }, { embedding: [3] }] }));
+  _setEmbedClient(s.client);
+  const out = await embedMany(["alpha", "beta", "gamma"]);
+  _setEmbedClient(null);
+  check("row 0 -> position 0", JSON.stringify(out[0]) === "[1]");
+  check("row 1 -> position 1", JSON.stringify(out[1]) === "[2]");
+  check("row 2 -> position 2", JSON.stringify(out[2]) === "[3]");
+}
+
 async function testEmbedManyAllBlank() {
   console.log("\n== embedMany() all-blank short-circuits with no call ==");
   const s = stub(() => ({ data: [] }));
@@ -99,6 +130,8 @@ async function main() {
   testCosine();
   await testEmbedBlank();
   await testEmbedManyRemap();
+  await testEmbedManyOutOfRangeIndex();
+  await testEmbedManyMissingIndex();
   await testEmbedManyAllBlank();
   await testEmbedManyFailSoft();
   console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILED"}`);
