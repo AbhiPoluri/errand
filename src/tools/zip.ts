@@ -96,7 +96,7 @@ export const extractZip: Tool<{ path: string }, { dest: string; files: number }>
 // The deepest ancestor of `p` that actually exists on disk — the furthest point realpathSync can
 // resolve. Used to scope-check a not-yet-created output: assertRealWithin no-ops on a missing path,
 // so we hand it this instead to catch a symlinked parent dir that escapes the sandbox.
-function deepestExisting(p: string): string {
+export function deepestExisting(p: string): string {
   let cur = p;
   while (!exists(cur)) {
     const parent = dirname(cur);

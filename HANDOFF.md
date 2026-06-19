@@ -62,10 +62,10 @@ websink/ext/bash/clickrisk/restart/cap); UI screenshot-verified (desktop + 375px
 reviews with all confirmed findings fixed or consciously left (the few "left" ones are noted in
 MORNING-REPORT.md and are low/self-healing).
 
-**Deferred for HUMAN review — do NOT ship unsupervised:** `save_as_document` — a from-scratch OOXML
-(.docx/.xlsx) *writer*. (`create_zip`, the other deferred writer, has since been built + reviewed +
-shipped — see the top of this doc.) Reading is shipped + safe; the round-trip-through-the-reader test
-plan is ready to make the document writer safe when reviewed.
+**Deferred binary writers: BOTH now shipped + reviewed.** `create_zip` and `save_as_document`
+(.docx/.xlsx) were the two from-scratch binary writers held back for review; both have since been
+built, 3-lens adversarially reviewed (all findings fixed), and shipped with round-trip + real-app
+(`textutil`/`unzip`) verification. Nothing is left on the deferred-writer list.
 
 **Suggested next (your call):** the **Electron wrap** paired with the **hosting-grade durability**
 refactor (agent core → main process; resume mid-flight; the `SessionStore`/`RunRegistry` swap — see

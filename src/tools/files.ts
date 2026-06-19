@@ -32,6 +32,7 @@ import {
 } from "./fileutil.ts";
 import { docKindFor, extractDocument, isImageFile, ocrImage } from "./extract.ts";
 import { extractZip, createZip } from "./zip.ts";
+import { saveAsDocument } from "./document.ts";
 
 // Human phrasing for a move/copy: "into <folder>" when relocating, "to <name>" when renaming.
 function relocationPhrase(verb: string, from: string, to: string): string {
@@ -978,4 +979,5 @@ export const fileTools = [
   deleteFile,
   extractZip,
   createZip,
+  saveAsDocument,
 ];

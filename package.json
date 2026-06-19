@@ -27,6 +27,7 @@
     "cap:test": "tsx src/capTest.ts",
     "endpoint:test": "tsx src/endpointTest.ts",
     "zip:test": "tsx src/zipTest.ts",
+    "docwrite:test": "tsx src/docWriteTest.ts",
     "mcp:test": "tsx src/mcpTest.ts",
     "skill:test": "tsx src/skillTest.ts",
     "cli": "tsx src/cli.ts",

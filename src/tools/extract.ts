@@ -524,3 +524,117 @@ export function buildZip(entries: ZipInput[]): Buffer {
   eocd.writeUInt16LE(0, 20); // comment length
   return Buffer.concat([localDir, centralDir, eocd]);
 }
+
+// ---- OOXML WRITERS (the mirror of extractDocx/extractXlsx) ----
+// A .docx/.xlsx is a ZIP of XML parts, so these reuse buildZip above. Kept deliberately MINIMAL —
+// just the parts Word/Excel require to open the file — and round-trip-verified by reading them back
+// with extractDocx/extractXlsx (and validated by the system `textutil`/`unzip` in doc:write tests).
+const X = (s: string) =>
+  s
+    // Strip XML-1.0-ILLEGAL C0 control chars first (keep \t \n \r). They have no escape and would make
+    // the part malformed — Word/Excel reject the file as corrupt even though our lenient reader tolerates it.
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+const XML_DECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+
+const DOCX_CONTENT_TYPES =
+  XML_DECL +
+  '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+  '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+  '<Default Extension="xml" ContentType="application/xml"/>' +
+  '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
+  "</Types>";
+const ROOT_RELS_DOCX =
+  XML_DECL +
+  '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+  '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>' +
+  "</Relationships>";
+
+// Plain text → a .docx. Each line becomes a paragraph (a blank line → an empty paragraph), so the
+// text round-trips through extractDocx line-for-line.
+export function buildDocx(text: string): Buffer {
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  const paras = lines
+    .map((ln) => (ln === "" ? "<w:p/>" : `<w:p><w:r><w:t xml:space="preserve">${X(ln)}</w:t></w:r></w:p>`))
+    .join("");
+  const doc =
+    XML_DECL +
+    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
+    paras +
+    "<w:sectPr/></w:body></w:document>";
+  return buildZip([
+    { name: "[Content_Types].xml", data: Buffer.from(DOCX_CONTENT_TYPES, "utf8") },
+    { name: "_rels/.rels", data: Buffer.from(ROOT_RELS_DOCX, "utf8") },
+    { name: "word/document.xml", data: Buffer.from(doc, "utf8") },
+  ]);
+}
+
+const XLSX_CONTENT_TYPES =
+  XML_DECL +
+  '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+  '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+  '<Default Extension="xml" ContentType="application/xml"/>' +
+  '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+  '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+  "</Types>";
+const ROOT_RELS_XLSX =
+  XML_DECL +
+  '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+  '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>' +
+  "</Relationships>";
+const WORKBOOK =
+  XML_DECL +
+  '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+  '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>';
+const WORKBOOK_RELS =
+  XML_DECL +
+  '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+  '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>' +
+  "</Relationships>";
+
+// 0→"A", 25→"Z", 26→"AA" — the inverse of colIndex() above.
+function colLetter(n: number): string {
+  let s = "";
+  n++;
+  while (n > 0) {
+    s = String.fromCharCode(65 + ((n - 1) % 26)) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
+}
+
+// A grid of cells → a single-sheet .xlsx. A cell that's a plain number is written as a numeric cell;
+// everything else as an inline string. Round-trips through extractXlsx (tab-separated, by A1 ref).
+export function buildXlsx(rows: string[][]): Buffer {
+  const rowXml = rows
+    .map((cells, ri) => {
+      const cs = cells
+        .map((cell, ci) => {
+          const ref = colLetter(ci) + (ri + 1);
+          const v = cell ?? "";
+          // Numeric cell ONLY when the value round-trips losslessly as a JS number — so "007",
+          // "02134" (zip codes), "3.10", and >15-digit IDs stay inline strings (Excel would
+          // otherwise drop the leading zeros / lose precision past 2^53).
+          if (v !== "" && Number.isFinite(Number(v)) && String(Number(v)) === v) return `<c r="${ref}"><v>${v}</v></c>`;
+          return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${X(v)}</t></is></c>`;
+        })
+        .join("");
+      return `<row r="${ri + 1}">${cs}</row>`;
+    })
+    .join("");
+  const sheet =
+    XML_DECL +
+    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' +
+    rowXml +
+    "</sheetData></worksheet>";
+  return buildZip([
+    { name: "[Content_Types].xml", data: Buffer.from(XLSX_CONTENT_TYPES, "utf8") },
+    { name: "_rels/.rels", data: Buffer.from(ROOT_RELS_XLSX, "utf8") },
+    { name: "xl/workbook.xml", data: Buffer.from(WORKBOOK, "utf8") },
+    { name: "xl/_rels/workbook.xml.rels", data: Buffer.from(WORKBOOK_RELS, "utf8") },
+    { name: "xl/worksheets/sheet1.xml", data: Buffer.from(sheet, "utf8") },
+  ]);
+}
