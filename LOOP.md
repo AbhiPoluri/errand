@@ -70,10 +70,54 @@ it under needs-attended/needs-user instead of the safe Backlog.
 
 ## Backlog (priority order — work the top unblocked item)
 
-_(empty — so the next heartbeat runs the **Discovery pass** (see the section above the Backlog): it
-scans for real, concrete, autonomously-safe work, queues it here, and works the top one. The loop no
-longer idles on an empty backlog; it only stops if Discovery genuinely finds nothing real. Remaining
-non-safe work is under needs-attended / needs-user below.)_
+_(Queued by the 2026-06-19 Discovery pass — 4 parallel scouts across the codebase, each candidate
+triaged. Work top-down; re-run Discovery when this empties again.)_
+
+- [ ] **(high) Lock the bash DENY denylist + SHELL_META with tests** (`src/bashTest.ts` covers only the
+  output cap today). The catastrophic-command gate (`src/tools/bash.ts:18-31`) is the highest-stakes
+  runtime safety check and is untested — a "simplify" edit could silently let `rm -rf /`/`sudo`/`mkfs`/
+  fork-bomb/`curl|sh` through post-approval. Add offline cases: each DENY string → `{ok:false,
+  error:"blocked"}` (no spawn); benign strings (`ls`, `rm notes.txt`, `rm -rf ./build`) NOT blocked;
+  `describe()` → "unknown" reversibility + the unpredictable-wording branch for a SHELL_META command.
+  Purely additive. Verify: `npm run bash:test` + tsc + full suite.
+- [ ] **(high) Add `mcpconfig:test` for the MCP-server config parser/sanitizer** (`src/server/mcp/
+  config.ts` `loadMcpServers`/`saveMcpServers`, untested). Lock: malformed/non-array JSON → `[]` (no
+  throw); entries missing `id`/`command`/`label` dropped; `args` coerced string-only; non-object `env`
+  dropped; `enabled` defaults true via `!== false`; save→load round-trip. Use the `ERRAND_DB` temp-DB
+  pattern (memtest/storetest). Purely additive. Verify: new `mcpconfig:test` + tsc + full suite.
+- [ ] **(high) Fix the stuck approval card** (`app/lib/useRun.ts` `decide`): it fires the POST but never
+  reads the response and only clears the amber permission card on the server's `approval.resolved` SSE.
+  When `runRegistry.decide()` returns false (approval already resolved/expired, run evicted) the route
+  still answers 200 and no `resolved` event fires → the card wedges forever on the app's most
+  trust-critical surface. Await the POST, and on `ok:false`/throw clear the parked approval + surface a
+  calm "that request expired" on the turn. Pairs with the route-code task below. Verify: tsc + reducer
+  reasoning (extract the failure step for a small assertion if practical).
+- [ ] **(med) MCP onClose idempotency** (`src/server/mcp/client.ts:67`): `onClose` runs fully on every
+  transport close; the over-long-line path in `transport.ts` fires close twice, so the 2nd overwrites
+  `closeErr` with a generic message and re-fires `onDisconnect`, masking the real reason. Add
+  `if (this.closed) return;` at the top of `onClose`; add an `mcpTest.ts` case driving a double-close via
+  the stub transport and asserting `onDisconnect` fires once + the first (real) reason is preserved.
+- [ ] **(med) Lock the folders symlink-escape defense** (`src/server/folders.ts:68` `checkRoots`):
+  `foldersTest.ts` only checks a plain non-allowed path, never the realpath/symlink comparison that stops
+  a symlink masquerading as an allowed folder. Add temp-dir cases: a symlink whose target is inside an
+  allowed root is accepted; a symlink whose target is outside (e.g. `/etc`) is rejected even though its
+  own path sits under a temp dir. Purely additive. Verify: `npm run folders:test` + tsc + full suite.
+- [ ] **(med) Tighten run-route status codes + decision allow-list** (`app/api/runs/[runId]/{auto,cancel,
+  decision}/route.ts`): these return 200 `{ok:false}` when the run is gone, while sibling `/message` +
+  `/undo` correctly return 404. Return 404 on a missing run to match; narrow `decision`'s accepted set to
+  the user-submittable decisions (`approved`/`denied`/`approved_always`) so an open client can't inject
+  `cancelled`/`expired`. Pairs with the stuck-card fix. Verify: tsc + reasoning (small route unit test if
+  practical).
+- [ ] **(med) Fix HANDOFF offline-suite drift** (`HANDOFF.md:24,95-97`): says "22 offline test suites"
+  and omits `models` from the list; reality is 23 (models added this session; LOOP's recent Done entries
+  already say 23). Update the count + list. Docs-only.
+- [ ] **(low) Harden DELETE routes** (`app/api/runs/route.ts` DELETE, `app/api/memory/route.ts` DELETE):
+  cap + de-dupe the runs `ids` array (currently unbounded; each is an abort+DB-delete) and return the
+  real removed count; require `/api/memory` DELETE `type` ∈ {memory,suggestion} (a typo'd type silently
+  deletes from the wrong store). Verify: tsc + reasoning / small handler test.
+- [ ] **(low) `save_as_document` empty xlsx** (`src/tools/document.ts:15-18`): whitespace-only content
+  → a 1×1 one-empty-cell sheet reported as "Saved." Either reject whitespace-only xlsx content or lock
+  the current behavior in `docWriteTest.ts`. Borderline — lowest priority.
 
 ## Blocked — needs the user / attended (DO NOT attempt unattended in the loop)
 
@@ -96,6 +140,16 @@ non-safe work is under needs-attended / needs-user below.)_
 
 ## Done log (newest first)
 
+- 2026-06-19 — **Discovery pass #1** (first run of the new find-work behavior). 4 parallel scouts swept
+  the codebase (agent-loop+tools, server+caps/mcp/skills, API+UI, coverage+drift); candidates triaged
+  for real/safe/verifiable/small/non-dupe. Queued 9 tasks into the Backlog (2 high coverage, 1 high UI
+  bug, 5 med, 2 low). Worked the top genuine bug this iteration:
+  **web_search res.ok** — `webSearch.run` never checked `res.ok` (unlike web_fetch), so a DDG
+  rate-limit/5xx parsed to zero rows and surfaced as "no_results", telling the model the topic has no
+  web presence when the request was blocked. Added the `if (!res.ok) return http_<status>` guard;
+  `webtest` now stubs fetch to lock 429→http_429 and 200-empty→no_results. tsc clean; 23 offline suites
+  green. `bbdbc64`. (The discovery Workflow harness wedged mid-run for the 3rd time this session — ran
+  the scouts as direct parallel subagents instead, which is reliable.)
 - 2026-06-19 — Boot-timeout cleanup (electron): on a waitForServer rejection, kill a still-alive
   (hung/timed-out) fork and null it so no zombie core lingers behind the error window holding :3200 +
   the SQLite WAL writer. Crash-exit path no-ops (serverProc already null); guards prevent respawn /
