@@ -6,8 +6,11 @@ import type { Decision } from "../../../../../src/approvals.ts";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// "approved_always" = approve this + auto-approve future REVERSIBLE actions this errand.
-const ALLOWED = ["approved", "denied", "cancelled", "expired", "approved_always"] as const;
+// Only the decisions a USER actually submits from the approval card. "cancelled"/"expired" are
+// internal/system outcomes (the loop resolves a parked approval that way on abort/timeout) and must
+// NOT be injectable via this open route. "approved_always" = approve this + auto-approve future
+// REVERSIBLE actions this errand.
+const ALLOWED = ["approved", "denied", "approved_always"] as const;
 
 export async function POST(req: NextRequest, { params }: { params: { runId: string } }) {
   const body = await req.json().catch(() => ({}));
@@ -20,5 +23,8 @@ export async function POST(req: NextRequest, { params }: { params: { runId: stri
     decision === "approved_always"
       ? approveAlways(params.runId, callId)
       : decide(params.runId, callId, decision as Decision);
-  return NextResponse.json({ ok });
+  // false = the run is gone or it's no longer waiting on that approval. 404 like /message + /undo, so
+  // the client can tell "applied" from "stale" (the approval card clears gracefully either way).
+  if (!ok) return NextResponse.json({ error: "run not found or no longer awaiting that approval" }, { status: 404 });
+  return NextResponse.json({ ok: true });
 }

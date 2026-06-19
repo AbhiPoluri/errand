@@ -8,5 +8,6 @@ export const dynamic = "force-dynamic";
 
 export async function POST(_req: NextRequest, { params }: { params: { runId: string } }) {
   const ok = cancelRun(params.runId);
-  return NextResponse.json({ ok });
+  if (!ok) return NextResponse.json({ error: "run not found" }, { status: 404 }); // match /message + /undo
+  return NextResponse.json({ ok: true });
 }

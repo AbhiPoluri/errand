@@ -36,6 +36,7 @@
     "seq:test": "tsx src/seqTest.ts",
     "models:test": "tsx src/modelsTest.ts",
     "userun:test": "tsx src/useRunTest.ts",
+    "runroute:test": "tsx src/runRouteTest.ts",
     "paths:test": "tsx src/pathsTest.ts",
     "folders:test": "tsx src/foldersTest.ts",
     "resume:test": "tsx src/resumeTest.ts",
