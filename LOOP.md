@@ -73,9 +73,8 @@ it under needs-attended/needs-user instead of the safe Backlog.
 _(Queued by the 2026-06-19 Discovery pass — 4 parallel scouts across the codebase, each candidate
 triaged. Work top-down; re-run Discovery when this empties again.)_
 
-- [ ] **(low) `save_as_document` empty xlsx** (`src/tools/document.ts:15-18`): whitespace-only content
-  → a 1×1 one-empty-cell sheet reported as "Saved." Either reject whitespace-only xlsx content or lock
-  the current behavior in `docWriteTest.ts`. Borderline — lowest priority.
+_(empty again — the Discovery #1 batch is fully cleared. The next iteration runs the Discovery pass to
+find + queue the next batch.)_
 
 ## Blocked — needs the user / attended (DO NOT attempt unattended in the loop)
 
@@ -98,6 +97,10 @@ triaged. Work top-down; re-run Discovery when this empties again.)_
 
 ## Done log (newest first)
 
+- 2026-06-19 — `save_as_document` empty-content guard (from Discovery #1, last of the batch). Empty/
+  whitespace-only content silently produced a blank docx / 1×1 empty-cell xlsx reported as "Saved."; now
+  refused with a calm message. docWriteTest +3. tsc clean; 26 suites green. `082e05e`. **Discovery #1
+  batch (9 tasks) fully cleared.**
 - 2026-06-19 — Harden DELETE routes (from Discovery #1). DELETE /api/runs now de-dupes + caps the ids
   batch (200) and reports the distinct count; DELETE /api/memory requires type ∈ {memory,suggestion}
   (default memory) so a typo'd type can't silently delete from the wrong store. runroute:test +7
