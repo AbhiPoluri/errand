@@ -3,7 +3,7 @@
 // and with no static assets. So we copy the FULL, self-contained .next/standalone tree into the
 // packaged app ourselves, AFTER electron-builder's filtered pack runs — verbatim, dereferencing
 // symlinks. macOS-only (the first build's target); guarded on the platform name.
-const { cpSync, existsSync } = require("node:fs");
+const { cpSync, existsSync, readdirSync, rmSync } = require("node:fs");
 const { join } = require("node:path");
 
 exports.default = async function afterPack(context) {
@@ -16,5 +16,11 @@ exports.default = async function afterPack(context) {
   }
   const dest = join(context.appOutDir, `${appName}.app`, "Contents", "Resources", "app", ".next", "standalone");
   cpSync(src, dest, { recursive: true, dereference: true });
-  console.log(`[after-pack] copied the full standalone server (node_modules + .next + static) -> ${dest}`);
+  // Defense in depth: never ship a .env* inside the bundle (it can carry OPENROUTER_API_KEY).
+  // prepare-standalone already strips them at the source; this guarantees the packaged tree is clean
+  // even if the standalone was built without that step.
+  for (const f of readdirSync(dest)) {
+    if (f === ".env" || f.startsWith(".env.")) rmSync(join(dest, f), { force: true });
+  }
+  console.log(`[after-pack] copied the standalone server (node_modules + .next + static, no .env) -> ${dest}`);
 };

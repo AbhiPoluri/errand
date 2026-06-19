@@ -2,7 +2,7 @@
 // public/ dir) into .next/standalone — so the standalone server can't serve CSS/JS without them.
 // This copies them in, making .next/standalone a self-contained, runnable server: the exact thing
 // the Electron main process forks as a utility process. Run via `npm run build:web`.
-import { existsSync, cpSync, mkdirSync } from "node:fs";
+import { existsSync, cpSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -12,6 +12,17 @@ const standalone = join(root, ".next", "standalone");
 if (!existsSync(join(standalone, "server.js"))) {
   console.error("[prepare-standalone] .next/standalone/server.js missing — run `next build` first.");
   process.exit(1);
+}
+
+// SECURITY: `next build` copies .env* into .next/standalone, and those carry OPENROUTER_API_KEY —
+// which must NEVER ship inside the packaged .app (a plaintext secret anyone with the bundle could
+// read). Strip them here so the standalone server NEVER reads a key from a bundled file; the key is
+// injected at runtime by the host (Electron main: launchd env / safeStorage), as it should be.
+for (const f of readdirSync(standalone)) {
+  if (f === ".env" || f.startsWith(".env.")) {
+    rmSync(join(standalone, f), { force: true });
+    console.log(`[prepare-standalone] stripped bundled secret file: ${f}`);
+  }
 }
 
 // .next/static -> .next/standalone/.next/static (hashed chunks + CSS the pages reference)
