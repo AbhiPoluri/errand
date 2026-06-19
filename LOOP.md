@@ -73,13 +73,6 @@ it under needs-attended/needs-user instead of the safe Backlog.
 _(Queued by the 2026-06-19 Discovery pass — 4 parallel scouts across the codebase, each candidate
 triaged. Work top-down; re-run Discovery when this empties again.)_
 
-- [ ] **(high) Lock the bash DENY denylist + SHELL_META with tests** (`src/bashTest.ts` covers only the
-  output cap today). The catastrophic-command gate (`src/tools/bash.ts:18-31`) is the highest-stakes
-  runtime safety check and is untested — a "simplify" edit could silently let `rm -rf /`/`sudo`/`mkfs`/
-  fork-bomb/`curl|sh` through post-approval. Add offline cases: each DENY string → `{ok:false,
-  error:"blocked"}` (no spawn); benign strings (`ls`, `rm notes.txt`, `rm -rf ./build`) NOT blocked;
-  `describe()` → "unknown" reversibility + the unpredictable-wording branch for a SHELL_META command.
-  Purely additive. Verify: `npm run bash:test` + tsc + full suite.
 - [ ] **(high) Add `mcpconfig:test` for the MCP-server config parser/sanitizer** (`src/server/mcp/
   config.ts` `loadMcpServers`/`saveMcpServers`, untested). Lock: malformed/non-array JSON → `[]` (no
   throw); entries missing `id`/`command`/`label` dropped; `args` coerced string-only; non-object `env`
@@ -140,6 +133,13 @@ triaged. Work top-down; re-run Discovery when this empties again.)_
 
 ## Done log (newest first)
 
+- 2026-06-19 — Lock the bash catastrophic-command denylist (from Discovery #1). `run_command`'s DENY
+  gate (the highest-stakes runtime safety check) had no test — only the output cap did. Exported
+  `DENY`+`SHELL_META` and added 27 assertions: 12 catastrophic strings match, 9 benign don't (incl. the
+  `rm -rf ../../..` traversal + relative `chmod 777` false-negatives, locked as currently-allowed),
+  `run()` short-circuits to `error:"blocked"` without spawning, and `describe()` gives "unknown"
+  reversibility + the unpredictable-wording branch for shell-meta. Purely additive. tsc clean; 23 suites
+  green. `d85fd9e`.
 - 2026-06-19 — **Discovery pass #1** (first run of the new find-work behavior). 4 parallel scouts swept
   the codebase (agent-loop+tools, server+caps/mcp/skills, API+UI, coverage+drift); candidates triaged
   for real/safe/verifiable/small/non-dupe. Queued 9 tasks into the Backlog (2 high coverage, 1 high UI
