@@ -18,12 +18,34 @@ if (!existsSync(join(standalone, "server.js"))) {
 // which must NEVER ship inside the packaged .app (a plaintext secret anyone with the bundle could
 // read). Strip them here so the standalone server NEVER reads a key from a bundled file; the key is
 // injected at runtime by the host (Electron main: launchd env / safeStorage), as it should be.
-for (const f of readdirSync(standalone)) {
-  if (f === ".env" || f.startsWith(".env.")) {
-    rmSync(join(standalone, f), { force: true });
-    console.log(`[prepare-standalone] stripped bundled secret file: ${f}`);
+//
+// Walk the WHOLE tree, not just its root: Next writes the copied .env at a path RELATIVE to its
+// file-tracing root (the closest lockfile), which can resolve to a PARENT dir — landing the .env in a
+// nested subdir (e.g. .next/standalone/<project>/.env) that a flat root-only scan would silently miss
+// and ship. A recursive strip can't no-op on that layout. (Skip node_modules: deps never carry the
+// app's secret, and the standalone dep tree is huge.)
+function stripEnvFiles(dir) {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch (e) {
+    // A freshly-built standalone tree (same user) shouldn't have unreadable/vanishing dirs, but if one
+    // does, warn and skip it rather than crashing the whole build (and the dist with it).
+    console.warn(`[prepare-standalone] could not read ${dir} (${e.code || e.message}) — skipping`);
+    return;
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      if (entry.name === "node_modules") continue;
+      stripEnvFiles(join(dir, entry.name));
+    } else if (entry.name === ".env" || entry.name.startsWith(".env.")) {
+      const full = join(dir, entry.name);
+      rmSync(full, { force: true });
+      console.log(`[prepare-standalone] stripped bundled secret file: ${full.slice(standalone.length + 1)}`);
+    }
   }
 }
+stripEnvFiles(standalone);
 
 // .next/static -> .next/standalone/.next/static (hashed chunks + CSS the pages reference)
 const staticDest = join(standalone, ".next", "static");

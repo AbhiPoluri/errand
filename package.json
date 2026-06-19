@@ -44,7 +44,7 @@
     "app": "npm run build:web && electron .",
     "set-key": "electron scripts/set-key.cjs",
     "dist": "npm run build:web && electron-builder --mac --dir",
-    "dist:dmg": "npm run build:web && electron-builder --mac"
+    "dist:dmg": "npm run build:web && electron-builder --mac dmg"
   },
   "build": {
     "appId": "com.abhirampoluri.errand",
