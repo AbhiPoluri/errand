@@ -142,6 +142,33 @@ async function main() {
   }
   check("a request after close rejects with the real reason (closeErr not clobbered)", /over-long message/.test(rejMsg), rejMsg);
 
+  // --- pack.ts: contentToText flatten/truncation + the isError->uncertain safety mapping, driven by a
+  //     STUB McpClient (no spawn). mcpToolToErrandTool's run() is only ever hit against the fake server's
+  //     single text part above, so these branches were untested. ---
+  const stubTool = (result: any) =>
+    mcpToolToErrandTool("srv", "Srv", { name: "act" }, { callTool: async () => result } as unknown as McpClient);
+  const textOf = async (content: any) => {
+    const r = await stubTool({ content }).run({}, ctx);
+    return r.ok ? (r.data as any).text : `ERR:${(r as any).error}`;
+  };
+  check("contentToText joins multiple text parts with newline", (await textOf([{ type: "text", text: "a" }, { type: "text", text: "b" }])) === "a\nb");
+  check("contentToText stringifies a json part", (await textOf([{ type: "json", json: { x: 1 } }])) === '{"x":1}');
+  check("contentToText falls back to JSON for an unknown part type", (await textOf([{ type: "image", url: "u" }])) === JSON.stringify({ type: "image", url: "u" }));
+  const trunc = await textOf([{ type: "text", text: "x".repeat(7000) }]);
+  check("contentToText truncates over 6000 chars with …[truncated]", trunc.endsWith("…[truncated]") && trunc.length === 6000 + "…[truncated]".length, `${trunc.length}`);
+  const errRes = await stubTool({ content: [{ type: "text", text: "server says nope" }], isError: true }).run({}, ctx);
+  check("isError -> ok:false, error mcp_tool_error, outcome:uncertain (never auto-retry a maybe-committed action)", !errRes.ok && (errRes as any).error === "mcp_tool_error" && (errRes as any).outcome === "uncertain", JSON.stringify(errRes));
+  check("isError surfaces the server's own text as the summary", !errRes.ok && (errRes as any).summary === "server says nope");
+  const throwTool = mcpToolToErrandTool("srv", "Srv", { name: "act" }, { callTool: async () => { throw new Error("boom"); } } as unknown as McpClient);
+  const thrown = await throwTool.run({}, ctx);
+  check("a thrown transport error -> ok:false, outcome:uncertain", !thrown.ok && (thrown as any).outcome === "uncertain");
+
+  // mcpToolName truncation SHAPE (collision/length already covered above; lock the hash-suffix form).
+  const longName = mcpToolName("srv", "a".repeat(80));
+  check("over-long tool name ends with _<6-char hash>", /_[a-z0-9]{6}$/.test(longName), longName);
+  check("over-long tool name is <= 64 chars", longName.length <= 64, `${longName.length}`);
+  check("mcpToolName is stable for the same (server,tool)", mcpToolName("srv", "act") === mcpToolName("srv", "act"));
+
   console.log(`\nRESULT: ${failures === 0 ? "ALL PASS" : failures + " FAILED"}`);
   if (failures) process.exitCode = 1;
 }
