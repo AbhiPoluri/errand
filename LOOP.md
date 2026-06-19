@@ -44,16 +44,20 @@ history/detail lives in `PLAN.md` §11 and `HANDOFF.md`; this file is just the a
 
 ## Backlog (priority order — work the top unblocked item)
 
-- [ ] **Phase 3b — incremental message persistence.** Add `store.saveTurnState/getTurnState/clearTurnState`
-  and a no-op `checkpoint` injected into `RunnerOpts`; wire checkpoints in `loop.ts` at the four safe
-  boundaries (after pushAssistant, after each pushToolResult, before gate.request, at settle). The
-  tool-result ordering invariant (every assistant tool_call gets a matching tool result) must hold in
-  the PERSISTED messages (backfill placeholders). Keep the turn-settle `setMessages` for now. New
-  `resume:test` for the 400-safe invariant across simulated crash points. (Depends on 3a.)
 - [ ] **journal-before-mutate.** Persist the journal manifest BEFORE the fs write (currently written on
   the later `tool.result`, so a crash between mutate and event = un-undoable). Inject a persist hook
   into the journal/ctx; reorder record-before-mutate in the mutating file tools. Pairs with the
   `tool_inflight` work. (HIGH-sev from the audit; see PLAN §11.)
+- [ ] **Phase 3c — resume engine (consume turn_state).** The payoff of 3a+3b: `AgentRunner.resume(state)`
+  that re-enters `send()` at the checkpoint's phase/cursor (skipping already-resolved calls; reversible
+  re-run, permanent → uncertain via a `tool_inflight` marker), re-parks an `awaiting_approval`
+  checkpoint so `/decision` continues the run, and a boot `bootstrap()` classify-and-resume pass. MUST:
+  `reconcileOrphans` should `clearTurnState` for each zombie it settles, and resume must IGNORE/delete a
+  `turn_state` row whose `runs` row is missing/stopped (orphan guard — see the 3b review). Optional:
+  add throttled per-result checkpointing if resume timings warrant finer granularity; harden tool_call
+  id assignment at the source (`id: tc.id || randomUUID()`) to kill the dup/empty-id 400 edge for good.
+  Ship behind `ERRAND_RESUME=1`, flip default after a `resume:test` proving end-to-end resume. (Big —
+  may span iterations.)
 - [ ] **In-app key-entry screen.** A Settings field to enter the OpenRouter key → an IPC/route path →
   `safeStorage` blob (the `set-key.cjs` logic, but from the UI), so a fresh install works without the
   env/CLI. The renderer must never see the key. (Makes the packaged app self-sufficient.)
@@ -77,6 +81,10 @@ history/detail lives in `PLAN.md` §11 and `HANDOFF.md`; this file is just the a
 
 ## Done log (newest first)
 
+- 2026-06-19 — Phase 3b: incremental mid-turn persistence — `backfillToolResults` (400-safe snapshot),
+  `checkpoint` in the loop (after-assistant + pre-approval boundaries), `saveTurnState/getTurnState/
+  clearTurnState`, wired in runRegistry (cleared at settle). Additive (no-op default). 3-lens review →
+  dropped the costly per-result checkpoint + added the deleted-guard. `resume:test`. `a0c97b3`.
 - 2026-06-19 — Phase 3a: `turn_state` + `tool_inflight` tables + `runs.resumable` column as migration
   v2 (additive, no behavior change yet — the resumable-runs persistence spine). `d89861f`.
 - 2026-06-18 — Phase 0 foundation (migrations/tx/seq/mutex) `19865b6`; Phase 1 core extraction
