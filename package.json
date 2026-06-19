@@ -58,7 +58,8 @@
     "mac": {
       "category": "public.app-category.productivity",
       "target": "dir",
-      "identity": null
+      "identity": null,
+      "icon": "build/icon.icns"
     }
   },
   "dependencies": {
