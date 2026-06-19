@@ -44,10 +44,6 @@ history/detail lives in `PLAN.md` §11 and `HANDOFF.md`; this file is just the a
 
 ## Backlog (priority order — work the top unblocked item)
 
-- [ ] **journal-before-mutate.** Persist the journal manifest BEFORE the fs write (currently written on
-  the later `tool.result`, so a crash between mutate and event = un-undoable). Inject a persist hook
-  into the journal/ctx; reorder record-before-mutate in the mutating file tools. Pairs with the
-  `tool_inflight` work. (HIGH-sev from the audit; see PLAN §11.)
 - [ ] **Phase 3c — resume engine (consume turn_state).** The payoff of 3a+3b: `AgentRunner.resume(state)`
   that re-enters `send()` at the checkpoint's phase/cursor (skipping already-resolved calls; reversible
   re-run, permanent → uncertain via a `tool_inflight` marker), re-parks an `awaiting_approval`
@@ -81,6 +77,10 @@ history/detail lives in `PLAN.md` §11 and `HANDOFF.md`; this file is just the a
 
 ## Done log (newest first)
 
+- 2026-06-19 — journal-before-mutate: synchronous `Journal.onRecord` hook persists the Undo manifest at
+  record-time (inside tool.run, no async yield) instead of on the later tool.result event — closes the
+  un-undoable-after-restart window. Wired in runRegistry (both paths); idempotent vs the existing
+  backstops. Adversarial review → no bugs. `journal:test` extended. `a8d1cb4`.
 - 2026-06-19 — Phase 3b: incremental mid-turn persistence — `backfillToolResults` (400-safe snapshot),
   `checkpoint` in the loop (after-assistant + pre-approval boundaries), `saveTurnState/getTurnState/
   clearTurnState`, wired in runRegistry (cleared at settle). Additive (no-op default). 3-lens review →
