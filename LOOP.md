@@ -73,10 +73,6 @@ it under needs-attended/needs-user instead of the safe Backlog.
 _(Queued by the 2026-06-19 Discovery pass — 4 parallel scouts across the codebase, each candidate
 triaged. Work top-down; re-run Discovery when this empties again.)_
 
-- [ ] **(low) Harden DELETE routes** (`app/api/runs/route.ts` DELETE, `app/api/memory/route.ts` DELETE):
-  cap + de-dupe the runs `ids` array (currently unbounded; each is an abort+DB-delete) and return the
-  real removed count; require `/api/memory` DELETE `type` ∈ {memory,suggestion} (a typo'd type silently
-  deletes from the wrong store). Verify: tsc + reasoning / small handler test.
 - [ ] **(low) `save_as_document` empty xlsx** (`src/tools/document.ts:15-18`): whitespace-only content
   → a 1×1 one-empty-cell sheet reported as "Saved." Either reject whitespace-only xlsx content or lock
   the current behavior in `docWriteTest.ts`. Borderline — lowest priority.
@@ -102,6 +98,10 @@ triaged. Work top-down; re-run Discovery when this empties again.)_
 
 ## Done log (newest first)
 
+- 2026-06-19 — Harden DELETE routes (from Discovery #1). DELETE /api/runs now de-dupes + caps the ids
+  batch (200) and reports the distinct count; DELETE /api/memory requires type ∈ {memory,suggestion}
+  (default memory) so a typo'd type can't silently delete from the wrong store. runroute:test +7
+  assertions. tsc clean; 26 suites green. `482cd18`.
 - 2026-06-19 — Fix HANDOFF offline-suite drift (from Discovery #1). Corrected "22 offline test suites"
   → 26 (lines 24 + 95) and added models/mcpconfig/userun/runroute to the list; verified the list equals
   all package.json *:test minus mem/doc/ocr. Docs-only. `b8ef572`.
