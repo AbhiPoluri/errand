@@ -29,14 +29,25 @@ follow-on. Phased plan:
   new (`paths:test`) + a live `next dev` smoke test (fresh DB materialized at the relocated path, real
   errand.db untouched). NB the `globalThis` singletons STAY for now (Next HMR needs them); the
   plain-singleton swap + the instrumentation.ts trigger are Phase-2 (Electron, where there's no HMR).
-- **Phase 2 — NEXT: Electron wrap. macOS-only for the first build (user's call 2026-06-18 — browser.ts's
-  Chrome /Applications paths + the `open -na` sign-in spawn are already mac-specific; cross-platform is a
-  separate effort).** main + a utility process for the core; `app.whenReady` boot sequence (set
-  ERRAND_DATA + key, import core, call `bootstrap()`); single-instance lock; before-quit cleanup (MCP
-  children + Playwright via `shutdown()`); bundled Next server on a fixed loopback port (extension keeps
-  working); `safeStorage` for the key; `output:'standalone'` + electron-builder + notarize. ⚠️ Pin an
-  Electron release whose bundled Node has `node:sqlite` (Node 22.5+/24) or store.ts dies at import.
-  ⚠️ USER PAUSED HERE 2026-06-18 to review Phases 0–1 before starting the heavier Electron packaging.
+- **Phase 2a+2b — Electron wrap (dev app): DONE (commit `c5bf518`). Errand is a working macOS desktop app.**
+  `next.config` → `output:'standalone'` + `scripts/prepare-standalone.mjs` (copies static/public Next omits);
+  `npm run build:web`. `electron/main.cjs` forks the standalone server as a utility process on loopback
+  **3200** (the extension's port — keeps working), opens a sandboxed BrowserWindow at it; `ERRAND_DATA=
+  userData`, key from `safeStorage`/env into the server env only, single-instance lock, before-quit →
+  utility-process kill → core `shutdown()`. `npm run app` (= build:web + electron). **Verified:** Electron
+  42.4.1 = Node 24.16.0 with `node:sqlite` working (audit's #1 risk cleared); app boots, DB+migrations under
+  `~/Library/Application Support/agent-harness`, window renders the full styled UI (screenshot-verified);
+  20/20 suites. ⚠️ binds 3200 → can't run `next dev` simultaneously. NB the `globalThis` singletons + the
+  Next-module-init `bootstrap()` trigger STAY (still the Next server hosting it); an instrumentation.ts/IPC
+  refinement is optional later.
+- **Phase 2c — NEXT: electron-builder packaging + signing (macOS-first).** add electron-builder; `build`
+  config (appId, mac dmg/zip target); **asarUnpack** `playwright-core`/`unpdf`/`tesseract.js` + the
+  `.next/standalone` server (they shell out / have wasm-workers); hardened-runtime entitlements
+  (child_process for MCP/bash/Playwright + outbound network); **macOS signing + notarize (needs the user's
+  Apple Developer identity — can't notarize without it; an unsigned/ad-hoc .app works for local use)**; and
+  a key-entry path in the app (the `safeStorage` blob is READ but nothing writes it yet — dev passes the env
+  key through). Also move the Chrome profile under `userData` via `ERRAND_BROWSER_PROFILES` for the packaged
+  app. ⚠️ macOS-only for the first build (user's call 2026-06-18).
 - **Phase 3 — resume follow-on.** `turn_state` checkpoint + `AgentRunner.resume()` + re-park parked
   approvals + `tool_inflight` uncertain-markers; **includes the deferred journal-manifest-before-mutate
   fix** (it pairs with the in-flight markers). Now testable against a stable single process.
