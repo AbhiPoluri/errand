@@ -22,6 +22,9 @@ function userVersion(db: DatabaseSync): number {
 function hasColumn(db: DatabaseSync, table: string, col: string): boolean {
   return (db.prepare(`PRAGMA table_info(${table})`).all() as any[]).some((c) => c.name === col);
 }
+function hasTable(db: DatabaseSync, name: string): boolean {
+  return !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(name);
+}
 
 async function main(): Promise<void> {
   // ---- 1. OLD DB: a pre-embedding memories table at user_version 0, with a real row. ----
@@ -45,12 +48,16 @@ async function main(): Promise<void> {
 
   {
     const insp = new DatabaseSync(oldDb);
-    check("migration added the embedding column to the old table", hasColumn(insp, "memories", "embedding"));
-    check("user_version bumped to the latest (1)", userVersion(insp) === 1);
+    check("migration v1 added the embedding column to the old table", hasColumn(insp, "memories", "embedding"));
+    check("user_version bumped to the latest (2)", userVersion(insp) === 2);
     // The pre-existing row survived the ALTER (migration is non-destructive).
     const row = insp.prepare("SELECT text, embedding FROM memories WHERE id = 'm1'").get() as any;
     check("existing memory row survived the migration", row?.text === "keep me");
     check("back-filled column is NULL on the old row (lazy embed later)", row?.embedding === null);
+    // v2 — resumable-runs spine: the two tables + the runs.resumable column exist now.
+    check("migration v2 created turn_state", hasTable(insp, "turn_state"));
+    check("migration v2 created tool_inflight", hasTable(insp, "tool_inflight"));
+    check("migration v2 added runs.resumable", hasColumn(insp, "runs", "resumable"));
     insp.close();
   }
   check("listMemories works post-migration", store.listMemories().length === 1);

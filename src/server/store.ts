@@ -117,6 +117,45 @@ const MIGRATIONS: Array<{ name: string; up: () => void }> = [
       }
     },
   },
+  {
+    // v2 — resumable-runs persistence spine (foundation for resume-mid-flight; no behavior change
+    // yet — these objects are written/read by later milestones). `turn_state` is the durable
+    // mid-turn checkpoint (one in-flight turn per run): the model's exact messages array plus enough
+    // loop state to re-enter send() at the right boundary. `tool_inflight` marks a permanent/unknown
+    // tool that was executing at crash time, so resume marks it UNCERTAIN instead of re-running it
+    // (the irreversible-double-execution guard). `runs.resumable` flags a run that has a recoverable
+    // checkpoint (boot resumes it) vs a legacy zombie (reconcile to interrupted). All additive +
+    // idempotent, so this is a no-op shape on a DB that somehow already has them.
+    name: "resume.turn_state",
+    up: () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS turn_state (
+          runId TEXT PRIMARY KEY,
+          turnId TEXT NOT NULL,
+          phase TEXT NOT NULL,
+          iteration INTEGER NOT NULL,
+          callCursor INTEGER NOT NULL DEFAULT 0,
+          pendingCallId TEXT,
+          messages TEXT NOT NULL,
+          callCounts TEXT NOT NULL DEFAULT '{}',
+          autoApproveReversible INTEGER NOT NULL DEFAULT 0,
+          maxEmittedSeq INTEGER NOT NULL DEFAULT -1,
+          updatedAt INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS tool_inflight (
+          runId TEXT NOT NULL,
+          callId TEXT NOT NULL,
+          toolName TEXT NOT NULL,
+          reversibility TEXT NOT NULL,
+          startedAt INTEGER NOT NULL,
+          PRIMARY KEY (runId, callId)
+        );
+      `);
+      if (!columnExists("runs", "resumable")) {
+        db.exec("ALTER TABLE runs ADD COLUMN resumable INTEGER NOT NULL DEFAULT 0");
+      }
+    },
+  },
 ];
 
 function userVersion(): number {
