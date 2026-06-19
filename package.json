@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "A from-scratch AI agent harness over OpenRouter. Own every line.",
+  "main": "electron/main.cjs",
   "scripts": {
     "v0": "tsx src/v0.ts",
     "models": "tsx src/checkModel.ts",
@@ -35,7 +36,10 @@
     "paths:test": "tsx src/pathsTest.ts",
     "cli": "tsx src/cli.ts",
     "web": "next dev -p 3200",
-    "dev": "next dev -p 3200"
+    "dev": "next dev -p 3200",
+    "build:web": "next build && node scripts/prepare-standalone.mjs",
+    "electron": "electron .",
+    "app": "npm run build:web && electron ."
   },
   "dependencies": {
     "framer-motion": "^12.40.0",
@@ -56,6 +60,7 @@
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
     "autoprefixer": "^10.5.0",
+    "electron": "^42.4.1",
     "postcss": "^8.5.15",
     "tailwindcss": "^3.4.19",
     "tsx": "^4.19.2",
