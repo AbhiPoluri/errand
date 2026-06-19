@@ -73,9 +73,6 @@ it under needs-attended/needs-user instead of the safe Backlog.
 _(Queued by the 2026-06-19 Discovery #2 pass — 4 parallel scouts (deep), each candidate triaged. Work
 top-down; re-run Discovery when this empties again.)_
 
-- [ ] **(med) Cover extractXlsx boolean/formula/error cells** (`src/tools/extract.ts:266-284`): docTest
-  only covers `t="s"` + untyped numbers; the `t="b"`→TRUE/FALSE, `t="str"` formula, and `t="e"` error
-  branches are unasserted. Add a docTest xlsx fixture with those cell types. Additive.
 - [ ] **(med) Cover embedMany malformed-index remap** (`src/server/embed.ts:58-62`): embedtest covers the
   valid-shuffled remap but not an out-of-range or missing `index` (positional fallback). Add embed:test
   cases asserting other rows keep their correct positions. Additive.
@@ -104,6 +101,10 @@ top-down; re-run Discovery when this empties again.)_
 
 ## Done log (newest first)
 
+- 2026-06-19 — Cover extractXlsx boolean/formula/error cell types (from Discovery #2). Added a buildZip
+  xlsx fixture (t="b"→TRUE/FALSE, t="str" formula, t="e" #DIV/0!) asserted via extractDocument; these
+  cellValue branches were unexercised. Additive (doc:test). tsc clean; 27 offline suites + doc green.
+  `e784f5f`.
 - 2026-06-19 — Direct unit test for backfillToolResults (from Discovery #2). New session:test (10
   assertions) locks the dedup + multi-strand branches the indirect resumeTest coverage didn't pin:
   fully-resolved unchanged, 1→1, 2→2 in order, already-resolved gets no duplicate, input not mutated.
