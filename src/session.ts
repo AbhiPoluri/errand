@@ -54,3 +54,32 @@ export class Session {
     this.messages.push(...messages);
   }
 }
+
+// Return a 400-SAFE COPY of `messages`: every assistant tool_call lacking a matching tool result
+// gets a synthetic placeholder result inserted right after its assistant message. Persisting a
+// mid-turn checkpoint built from this guarantees the saved array never strands a tool_call — which
+// would 400 the next request when the run is resumed. PURE: never mutates the input (the live
+// in-loop array has its own end-of-turn backfill; this one is for the durable snapshot).
+// ASSUMES tool_call ids are UNIQUE across the array (the loop's own invariant — `parallel_tool_calls`
+// is off and ids come straight from the model). A duplicate/empty id reused across assistant messages
+// could still strand a call here, but such output already 400s the LIVE request path, so it's a
+// pre-existing model-compliance issue, not one this snapshot introduces.
+export function backfillToolResults(messages: Message[]): Message[] {
+  const haveResult = new Set(
+    messages.filter((m) => m.role === "tool").map((m) => (m as { tool_call_id?: string }).tool_call_id),
+  );
+  const out: Message[] = [];
+  for (const m of messages) {
+    out.push(m);
+    const calls = (m as { tool_calls?: { id: string }[] }).tool_calls;
+    if (m.role === "assistant" && Array.isArray(calls)) {
+      for (const c of calls) {
+        if (!haveResult.has(c.id)) {
+          out.push({ role: "tool", tool_call_id: c.id, content: '{"ok":false,"error":"interrupted"}' } as Message);
+          haveResult.add(c.id);
+        }
+      }
+    }
+  }
+  return out;
+}

@@ -203,6 +203,13 @@ const stmtAddJournal = db.prepare(
 const stmtJournal = db.prepare(
   `SELECT opId, op, description, reversibility, manifest FROM journal WHERE runId = ? ORDER BY rowid ASC`,
 );
+const stmtSaveTurn = db.prepare(
+  `INSERT OR REPLACE INTO turn_state
+     (runId, turnId, phase, iteration, callCursor, pendingCallId, messages, callCounts, autoApproveReversible, maxEmittedSeq, updatedAt)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+);
+const stmtGetTurn = db.prepare(`SELECT * FROM turn_state WHERE runId = ?`);
+const stmtClearTurn = db.prepare(`DELETE FROM turn_state WHERE runId = ?`);
 
 export function createRun(runId: string, title: string, createdAt: number, roots: string[]): void {
   stmtCreate.run(runId, title, createdAt, JSON.stringify(roots), Date.now());
@@ -288,12 +295,13 @@ export function getJournalOps(runId: string): JournalOp[] {
   }));
 }
 
-// Permanently remove a run and its full event stream (user clears it from Recently). All three
-// deletes commit together so a crash can't orphan events/journal rows under a vanished run row.
+// Permanently remove a run and its full event stream (user clears it from Recently). All the
+// deletes commit together so a crash can't orphan events/journal/turn_state rows under a vanished run.
 export function deleteRun(runId: string): void {
   tx(() => {
     db.prepare("DELETE FROM events WHERE runId = ?").run(runId);
     db.prepare("DELETE FROM journal WHERE runId = ?").run(runId);
+    db.prepare("DELETE FROM turn_state WHERE runId = ?").run(runId);
     db.prepare("DELETE FROM runs WHERE runId = ?").run(runId);
   });
 }
@@ -310,6 +318,58 @@ export function getStoredRun(
     roots: safeParse<string[]>(r.roots, []),
     messages: safeParse<any[]>(r.messages, []),
   };
+}
+
+// ---- turn_state (the durable mid-turn checkpoint — see loop.ts TurnState) ----
+// One in-flight turn per run, so keyed by runId (INSERT OR REPLACE overwrites the prior checkpoint).
+// Written continuously during a turn (so mid-turn state survives a crash) and cleared at turn-settle
+// — the durable record of a SETTLED turn lives in runs.messages + events; turn_state is in-flight scratch.
+export interface TurnStateRow {
+  turnId: string;
+  phase: string;
+  iteration: number;
+  callCursor: number;
+  pendingCallId: string | null;
+  messages: any[]; // already 400-safe (backfilled) by the caller
+  callCounts: Record<string, number>;
+  autoApproveReversible: boolean;
+  maxEmittedSeq: number;
+}
+
+export function saveTurnState(runId: string, s: TurnStateRow): void {
+  stmtSaveTurn.run(
+    runId,
+    s.turnId,
+    s.phase,
+    s.iteration,
+    s.callCursor,
+    s.pendingCallId ?? null,
+    JSON.stringify(s.messages),
+    JSON.stringify(s.callCounts ?? {}),
+    s.autoApproveReversible ? 1 : 0,
+    s.maxEmittedSeq,
+    Date.now(),
+  );
+}
+
+export function getTurnState(runId: string): TurnStateRow | null {
+  const r = stmtGetTurn.get(runId) as any;
+  if (!r) return null;
+  return {
+    turnId: r.turnId,
+    phase: r.phase,
+    iteration: r.iteration,
+    callCursor: r.callCursor,
+    pendingCallId: r.pendingCallId ?? null,
+    messages: safeParse<any[]>(r.messages, []),
+    callCounts: safeParse<Record<string, number>>(r.callCounts, {}),
+    autoApproveReversible: !!r.autoApproveReversible,
+    maxEmittedSeq: r.maxEmittedSeq,
+  };
+}
+
+export function clearTurnState(runId: string): void {
+  stmtClearTurn.run(runId);
 }
 
 // ---- restart reconciliation ----

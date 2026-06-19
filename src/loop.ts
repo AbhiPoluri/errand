@@ -7,6 +7,7 @@ import type OpenAI from "openai";
 import { client as defaultClient } from "./client.ts";
 import { config } from "./config.ts";
 import type { Session } from "./session.ts";
+import { backfillToolResults } from "./session.ts";
 import type { Logger } from "./log.ts";
 import { Registry, toToolMessage, type ToolContext } from "./tools/index.ts";
 import { type ApprovalGate, AutoDenyGate } from "./approvals.ts";
@@ -45,6 +46,22 @@ export interface RunnerOpts {
   client?: OpenAI; // which OpenAI-compatible endpoint (default: the OpenRouter singleton)
   stream?: boolean; // small local models do tool-calling better non-streamed (default: true)
   vision?: boolean; // feed page screenshots to the model after browser actions (needs a vision model)
+  checkpoint?: (state: TurnState) => void; // persist mid-turn state for resumability (default: no-op)
+}
+
+// A durable mid-turn checkpoint: the model's exact (400-safe) messages array plus enough loop
+// position to re-enter send() at the right boundary on resume. Persisted by the host via the
+// `checkpoint` callback; not yet consumed for resume (that's the next milestone) — this milestone
+// just makes mid-turn state durable. One in-flight turn per run.
+export interface TurnState {
+  turnId: string;
+  phase: "executing_tools" | "awaiting_approval";
+  iteration: number;
+  callCursor: number; // how many of this turn's tool_calls have a real result so far
+  pendingCallId: string | null; // the call awaiting approval (phase=awaiting_approval), else null
+  messages: unknown[]; // backfillToolResults(session.messages) — never strands a tool_call
+  callCounts: Record<string, number>; // stuck-detection counters
+  maxEmittedSeq: number; // seq high-water, so resume continues the SSE stream without collisions
 }
 
 export class AgentRunner {
@@ -100,6 +117,33 @@ export class AgentRunner {
     // (tool calls, approvals, errors, usage) are still logged.
     if (!isDelta) this.o.logger.log("event", event);
     await this.o.sink.emit(event);
+  }
+
+  // Persist a mid-turn checkpoint (no-op unless the host injected `checkpoint`). The messages are
+  // backfilled to be 400-safe (no stranded tool_call). A checkpoint failure must NEVER break the
+  // turn, so it's fully swallowed — the loop runs identically with or without persistence.
+  private saveCheckpoint(
+    phase: TurnState["phase"],
+    iteration: number,
+    callCursor: number,
+    pendingCallId: string | null,
+    callCounts: Map<string, number>,
+  ): void {
+    if (!this.o.checkpoint) return;
+    try {
+      this.o.checkpoint({
+        turnId: this.turnId,
+        phase,
+        iteration,
+        callCursor,
+        pendingCallId,
+        messages: backfillToolResults(this.o.session.messages),
+        callCounts: Object.fromEntries(callCounts),
+        maxEmittedSeq: this.seq,
+      });
+    } catch {
+      /* checkpoint failure must never interrupt the turn */
+    }
   }
 
   // One user message -> runs to completion (final answer, error, or cancellation).
@@ -305,6 +349,11 @@ export class AgentRunner {
         return text;
       }
 
+      // Mid-turn checkpoint: the assistant tool_calls message is committed and we're about to run
+      // tools — persist a 400-safe snapshot (placeholders for the not-yet-run calls) so a crash here
+      // leaves the run resumable. No-op unless a host injected `checkpoint`.
+      this.saveCheckpoint("executing_tools", i, 0, null, callCounts);
+
       // Sequential tool execution. EVERY call MUST get a tool result appended (ordering
       // invariant) — the `finally` backfills any call left unresolved (cancel, throw,
       // a denied gate) so session.messages never strands a tool_call and 400s next turn.
@@ -327,6 +376,13 @@ export class AgentRunner {
       const pushResult = (callId: string, content: string) => {
         this.o.session.pushToolResult(callId, content);
         resolvedCalls.add(callId);
+        // NB: deliberately NOT re-checkpointing per tool result — that re-serialized the whole
+        // (possibly screenshot/doc-laden) conversation synchronously on every result, O(K·N) per
+        // turn on the event loop. The after-assistant checkpoint above + the pre-approval one below
+        // already bound the lost-work window; a crash mid-execution just re-runs this iteration's
+        // tools on resume (reversible → idempotent; permanent → the tool_inflight uncertain guard).
+        // Finer-grained, throttled per-result checkpointing can come with the resume consumer if its
+        // timings warrant it.
       };
 
       try {
@@ -380,6 +436,9 @@ export class AgentRunner {
               await this.emit({ type: "approval.resolved", callId, decision: "approved" });
             } else {
               await this.emit({ type: "approval.required", ...reqInfo });
+              // Checkpoint the suspension point: which call is awaiting approval, so resume can
+              // re-park it (next milestone) rather than lose the parked promise on a crash.
+              this.saveCheckpoint("awaiting_approval", i, resolvedCalls.size, callId, callCounts);
               const decision = await this.gate.request(reqInfo, signal); // never rejects
               await this.emit({ type: "approval.resolved", callId, decision });
               if (decision !== "approved") {

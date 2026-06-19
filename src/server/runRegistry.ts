@@ -9,7 +9,7 @@ import { Registry } from "../tools/index.ts";
 import { buildRegistryFor, enabledPacks } from "../capabilities/index.ts";
 import { makeClient } from "../client.ts";
 import { ENDPOINTS, DEFAULT_OLLAMA_BASE_URL, normalizeOllamaBaseUrl, modelSupportsVision } from "../models.ts";
-import { AgentRunner } from "../loop.ts";
+import { AgentRunner, type TurnState } from "../loop.ts";
 import { type ApprovalGate, type ApprovalRequest, type Decision } from "../approvals.ts";
 import { SYSTEM_PROMPT } from "../prompt.ts";
 import { WebSink } from "./webSink.ts";
@@ -320,6 +320,21 @@ function persistJournal(entry: RunEntry): void {
   }
 }
 
+// The per-run checkpoint callback handed to the loop: persist its mid-turn TurnState, enriched with
+// this run's in-memory trust flag (autoApproveReversible), which the loop doesn't know. Fully
+// swallowed — a checkpoint write failing must never affect the turn (the loop runs the same with or
+// without persistence; resume just won't be available for that run).
+function checkpointFor(entry: RunEntry): (s: TurnState) => void {
+  return (s) => {
+    if (entry.deleted) return; // removed mid-turn — don't re-create its turn_state row (mirrors attachPersistence)
+    try {
+      store.saveTurnState(entry.runId, { ...s, autoApproveReversible: entry.autoApproveReversible });
+    } catch (e) {
+      console.warn(`[errand] failed to checkpoint turn_state for run ${entry.runId} (continuing):`, e);
+    }
+  };
+}
+
 // Enqueue a turn. The work chains onto entry.turnQueue so it can't begin until any prior turn has
 // fully settled — guaranteeing one runner.send() at a time on this run's Session. The queue never
 // rejects (execTurn swallows its own errors), so the chain can't break.
@@ -344,6 +359,7 @@ function execTurn(entry: RunEntry, message: string, turnId: number): Promise<voi
       // kicking off dreaming failing should be silent, not fatal.
       try {
         store.setMessages(entry.runId, entry.session.messages); // durable conversation
+        store.clearTurnState(entry.runId); // turn settled — the durable record is now runs.messages
         if (!entry.deleted) persistJournal(entry); // so Undo survives a restart / eviction
         maybeDream(); // reflect after the task settles (if dreaming is on)
       } catch (err) {
@@ -384,6 +400,7 @@ export async function startRun(message: string, roots?: string[]): Promise<strin
     logger: new Logger(runId),
     runId,
     gate: new WebGate(entry),
+    checkpoint: checkpointFor(entry),
     roots: usedRoots,
   });
   store.createRun(runId, entry.title, entry.createdAt, usedRoots);
@@ -433,6 +450,7 @@ function rehydrate(runId: string): RunEntry | undefined {
     logger: new Logger(runId),
     runId,
     gate: new WebGate(entry),
+    checkpoint: checkpointFor(entry),
     roots: stored.roots.length ? stored.roots : [config.workspaceRoot],
     startSeq: maxSeq + 1,
   });
