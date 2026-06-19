@@ -3,6 +3,34 @@
 > Read this first to resume. `PLAN.md` §11 is the full dated changelog (every item below has an
 > entry there with the exact files + verification). This block is the short "where we are + what's next."
 
+## ⏩ ACTIVE: Durability + Electron (branch `durability-electron`, started 2026-06-18)
+Making runs RESUMABLE + wrapping as a desktop app. Driven by a 10-agent audit (durability gap-map +
+Electron design + 25 ranked risks). **Decision: Electron-FIRST** — extract the agent core out of
+Next module-eval → wrap in Electron (a single long-lived main process means a renderer reload no
+longer kills the loop, so it banks most of the durability win for free) → THEN full resume as a
+follow-on. Phased plan:
+- **Phase 0 — foundation: DONE + reviewed (this branch, uncommitted-or-just-committed).** 5 no-regret
+  fixes that are real latent bugs today: (1) schema-migration framework (`PRAGMA user_version` + ordered
+  `MIGRATIONS`, in `tx()`); (2) transaction discipline (`tx()` helper; `deleteRun`/`reconcileOrphans`
+  atomic); (3) seq stability (deltas no longer advance the durable seq → no silent event-skip / stuck-tab
+  on restart); (4) per-run turn mutex (`turnQueue` replaces the 5s overlap race); (5) `next build` spike
+  (builds clean → Electron hosting option B viable; add `output:'standalone'` for packaging). 3-lens
+  adversarial review → seq lens cleared all 5 attack scenarios; HIGH (Stop lost for a queued turn) +
+  LOW (reconcile seq cursor under corrupt rows) fixed. **All 19 offline suites pass** (+2 new:
+  `migrate:test`, `seq:test`); migration verified on a copy of the live 56MB DB. See PLAN §11 (top).
+- **Phase 1 — NEXT: agent-core extraction.** Module-init side effects (`store` DB-open,
+  `reconcileOrphans`, MCP `configure`) → an explicit `bootstrap()`; drop the `globalThis` singletons;
+  route every fs path (`errand.db`, workspace, skills, logs, tesseract cache, Chrome profiles) through
+  env overrides toward `userData`; missing `OPENROUTER_API_KEY` → a calm runtime error, not an
+  import-time throw. The shared prerequisite for the wrap.
+- **Phase 2 — Electron wrap.** main + a utility process for the core; `app.whenReady` boot sequence;
+  single-instance lock; before-quit cleanup (MCP children + Playwright); bundled Next server on a fixed
+  loopback port (extension keeps working); `safeStorage` for the key; electron-builder + notarize.
+- **Phase 3 — resume follow-on.** `turn_state` checkpoint + `AgentRunner.resume()` + re-park parked
+  approvals + `tool_inflight` uncertain-markers; **includes the deferred journal-manifest-before-mutate
+  fix** (it pairs with the in-flight markers). Now testable against a stable single process.
+Audit detail lives in the session transcript; the design is grounded in this file + PLAN.
+
 ## Where we are
 **Everything is on `main`, committed AND pushed to GitHub `AbhiPoluri/errand` (HEAD `4675873`, clean
 tree).** The overnight branch was merged (`9d23a24`); all work since is on `main`. This session shipped

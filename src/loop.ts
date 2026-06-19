@@ -73,18 +73,32 @@ export class AgentRunner {
   }
 
   private async emit(body: AgentEventBody): Promise<void> {
+    // `seq` is the DURABLE ordering key: it is the events-table primary key AND the SSE
+    // Last-Event-ID a client resumes from. Only STRUCTURAL (persisted) events advance it, so the
+    // persisted seq space stays contiguous and a rehydrated run's startSeq = maxPersistedSeq + 1
+    // is always strictly greater than any seq a client has ever seen. message.delta is the lone
+    // per-token event that is never persisted; if it advanced `seq`, the live counter would outrun
+    // the persisted max by the number of streamed tokens, and after a restart a NEW structural
+    // event could be minted at a seq a live tab already consumed via a delta — silently skipped on
+    // reconnect (it sits below the tab's Last-Event-ID). So a delta instead BORROWS the seq of the
+    // preceding structural event (`this.seq - 1`): it still sorts right after that event and
+    // strictly before the next structural one, and is filtered out on any reconnect past it. The
+    // final reply text always rides on the structural message.completed, so a dropped delta is
+    // lossless. (The reducer appends delta text and there is no seq-dedup, so a shared seq is safe.)
+    const isDelta = body.type === "message.delta";
+    const seq = isDelta ? Math.max(0, this.seq - 1) : this.seq++;
     const event: AgentEvent = {
       ...body,
       runId: this.runId,
       turnId: this.turnId,
-      seq: this.seq++,
+      seq,
       ts: Date.now(),
     };
     // Skip the per-token deltas: Logger.log is a synchronous appendFileSync, so logging every
     // streamed token serializes the stream behind disk latency. The final text is reconstructed
     // from message.completed, so per-delta logs carry no diagnostic value. Structural events
     // (tool calls, approvals, errors, usage) are still logged.
-    if (event.type !== "message.delta") this.o.logger.log("event", event);
+    if (!isDelta) this.o.logger.log("event", event);
     await this.o.sink.emit(event);
   }
 

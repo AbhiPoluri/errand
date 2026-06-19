@@ -26,6 +26,26 @@ try {
   // A read-only or unusual filesystem may reject WAL; the default journal still works.
 }
 
+// Run fn inside a single SQLite transaction so a multi-statement write is all-or-nothing: a
+// crash (or a thrown error) mid-way rolls back instead of leaving half-applied rows. node:sqlite
+// has no .transaction() helper, so drive BEGIN/COMMIT/ROLLBACK explicitly. NOT re-entrant —
+// SQLite has no nested BEGIN; never call tx() from inside another tx().
+export function tx<T>(fn: () => T): T {
+  db.exec("BEGIN");
+  try {
+    const result = fn();
+    db.exec("COMMIT");
+    return result;
+  } catch (e) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      // ROLLBACK can only fail if no transaction is open (already rolled back) — ignore.
+    }
+    throw e;
+  }
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS runs (
     runId TEXT PRIMARY KEY,
@@ -72,15 +92,48 @@ db.exec(`
   );
 `);
 
-// Migration: add the embedding column to memories tables created before retrieval existed.
-// CREATE TABLE IF NOT EXISTS won't alter an existing table, so do it explicitly. Existing
-// rows keep embedding = NULL and get backfilled lazily on first retrieval.
-{
-  const cols = db.prepare("PRAGMA table_info(memories)").all() as any[];
-  if (!cols.some((c) => c.name === "embedding")) {
-    db.exec("ALTER TABLE memories ADD COLUMN embedding TEXT");
+// ---- ordered schema migrations ----
+// The baseline CREATE TABLE IF NOT EXISTS above is "the schema a fresh DB gets". Anything that
+// can't be expressed idempotently that way — chiefly ALTER TABLE on an EXISTING table — goes
+// here as a numbered migration. SQLite's PRAGMA user_version is the durable cursor: each
+// migration runs at most once, in order, and bumps the version inside the SAME transaction so a
+// crash mid-migration rolls back AND leaves the version unbumped (it re-runs cleanly next boot).
+// The durability/resume refactor (turn_state, tool_inflight, runs.resumable) lands as migrations
+// 2, 3, … here instead of one-off probes.
+function columnExists(table: string, col: string): boolean {
+  return (db.prepare(`PRAGMA table_info(${table})`).all() as any[]).some((c) => c.name === col);
+}
+
+const MIGRATIONS: Array<{ name: string; up: () => void }> = [
+  {
+    // v1 — embedding column for memories tables created before retrieval existed. Guarded so it
+    // is a no-op on a fresh DB (baseline already declares the column) and on the live errand.db
+    // (the old ad-hoc probe already added it); only a genuinely pre-embedding DB gets the ALTER.
+    name: "memories.embedding",
+    up: () => {
+      if (!columnExists("memories", "embedding")) {
+        db.exec("ALTER TABLE memories ADD COLUMN embedding TEXT");
+      }
+    },
+  },
+];
+
+function userVersion(): number {
+  return Number((db.prepare("PRAGMA user_version").get() as any).user_version) || 0;
+}
+
+function runMigrations(): void {
+  for (let v = userVersion(); v < MIGRATIONS.length; v++) {
+    const m = MIGRATIONS[v];
+    tx(() => {
+      m.up();
+      // user_version is an integer we control (the loop index), not user input — PRAGMA can't be
+      // parameterized, so interpolate the validated int. The bump shares the migration's tx.
+      db.exec(`PRAGMA user_version = ${v + 1}`);
+    });
   }
 }
+runMigrations();
 
 // Expression indexes for the case-insensitive dedup lookups. addMemory/addSuggestion both do
 // `WHERE lower(text) = lower(?)`, which can't use a plain text index — so every insert was an
@@ -102,6 +155,7 @@ const stmtList = db.prepare(
   `SELECT runId, title, createdAt, status, changeCount FROM runs ORDER BY createdAt DESC LIMIT 50`,
 );
 const stmtEvents = db.prepare(`SELECT payload FROM events WHERE runId = ? ORDER BY seq ASC`);
+const stmtMaxSeq = db.prepare(`SELECT MAX(seq) AS m FROM events WHERE runId = ?`);
 const stmtRun = db.prepare(`SELECT runId, title, createdAt, roots, messages FROM runs WHERE runId = ?`);
 const stmtAddJournal = db.prepare(
   `INSERT OR IGNORE INTO journal (runId, opId, op, description, reversibility, manifest) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -194,11 +248,14 @@ export function getJournalOps(runId: string): JournalOp[] {
   }));
 }
 
-// Permanently remove a run and its full event stream (user clears it from Recently).
+// Permanently remove a run and its full event stream (user clears it from Recently). All three
+// deletes commit together so a crash can't orphan events/journal rows under a vanished run row.
 export function deleteRun(runId: string): void {
-  db.prepare("DELETE FROM events WHERE runId = ?").run(runId);
-  db.prepare("DELETE FROM journal WHERE runId = ?").run(runId);
-  db.prepare("DELETE FROM runs WHERE runId = ?").run(runId);
+  tx(() => {
+    db.prepare("DELETE FROM events WHERE runId = ?").run(runId);
+    db.prepare("DELETE FROM journal WHERE runId = ?").run(runId);
+    db.prepare("DELETE FROM runs WHERE runId = ?").run(runId);
+  });
 }
 
 export function getStoredRun(
@@ -230,34 +287,45 @@ export function reconcileOrphans(liveIds: Set<string> = new Set()): number {
     .filter((id) => !liveIds.has(id));
   for (const runId of orphans) {
     const events = getEvents(runId);
-    let seq = (events.length ? events[events.length - 1].seq : -1) + 1;
     const turnId = "interrupted";
     const resolved = new Set<string>();
     for (const e of events) if (e.type === "approval.resolved") resolved.add(e.callId);
-    for (const e of events) {
-      if (e.type === "approval.required" && !resolved.has(e.callId)) {
-        appendEvent(runId, {
-          runId,
-          turnId,
-          seq: seq++,
-          ts: Date.now(),
-          type: "approval.resolved",
-          callId: e.callId,
-          decision: "cancelled",
-        });
+    // One run's reconciliation is all-or-nothing: cancelling its open approvals, appending the
+    // terminal "interrupted" event, and flipping status to 'stopped' commit together, so a crash
+    // mid-reconcile can't leave a run half-tidied and still 'working' for the next boot to redo.
+    tx(() => {
+      // Cursor from the actual table (MAX), NOT events[last].seq: getEvents() drops corrupt/unparseable
+      // rows (the very failure this durability work guards against), so if the highest-seq row is
+      // corrupt, the parsed-list cursor would reuse an occupied (runId, seq) PRIMARY KEY and
+      // appendEvent's INSERT OR IGNORE would silently drop the reconcile event — leaving the approval
+      // card uncancelled. MAX(seq) sits above corrupt rows too, so the all-or-nothing tx truly completes.
+      const m = (stmtMaxSeq.get(runId) as any)?.m;
+      let seq = (typeof m === "number" ? m : -1) + 1;
+      for (const e of events) {
+        if (e.type === "approval.required" && !resolved.has(e.callId)) {
+          appendEvent(runId, {
+            runId,
+            turnId,
+            seq: seq++,
+            ts: Date.now(),
+            type: "approval.resolved",
+            callId: e.callId,
+            decision: "cancelled",
+          });
+        }
       }
-    }
-    appendEvent(runId, {
-      runId,
-      turnId,
-      seq: seq++,
-      ts: Date.now(),
-      type: "run.error",
-      kind: "cancelled",
-      userMessage: "This task was interrupted when the app restarted. Send a message to pick up where it left off.",
-      recoverable: true,
+      appendEvent(runId, {
+        runId,
+        turnId,
+        seq: seq++,
+        ts: Date.now(),
+        type: "run.error",
+        kind: "cancelled",
+        userMessage: "This task was interrupted when the app restarted. Send a message to pick up where it left off.",
+        recoverable: true,
+      });
+      setStatus(runId, "stopped");
     });
-    setStatus(runId, "stopped");
   }
   return orphans.length;
 }

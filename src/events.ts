@@ -7,7 +7,11 @@ import type { Reversibility } from "./tools/index.ts";
 export interface EventMeta {
   runId: string;
   turnId: string;
-  seq: number; // monotonic per run; also used as the SSE id: for reconnect dedupe (v4)
+  // Monotonic across STRUCTURAL (persisted) events; message.delta borrows the preceding structural
+  // seq (see loop.ts emit), so a delta's seq is not unique. Used as the SSE id:; a client resumes
+  // from Last-Event-ID and the buffer replays seq >= fromSeq (range filter, not equality dedupe) —
+  // deltas are losslessly droppable since message.completed carries the full text.
+  seq: number;
   ts: number; // epoch ms
 }
 

@@ -46,6 +46,17 @@ interface RunEntry {
   title: string; // first message, for the Recently list
   createdAt: number;
   deleted?: boolean; // user removed it mid-run — stop persisting its in-flight events
+  // Serializes turns on this run. Each turn chains onto the previous one's settled promise, so two
+  // runner.send() calls can NEVER execute concurrently on the one shared Session (its messages
+  // array) — even when an interrupted turn's tool ignores the abort signal and keeps running. This
+  // replaces the old "abort, wait up to 5s, then start the next turn regardless" race.
+  turnQueue: Promise<void>;
+  // Monotonic count of turns ever enqueued, and the highest turn id that has been cancelled. A
+  // queued turn is skipped before it starts when its id <= cancelledThrough — so a Stop that lands
+  // while a follow-up turn is still QUEUED (behind a turn whose tool is ignoring abort) cancels
+  // that queued turn too, instead of letting it run to completion the moment the one ahead settles.
+  turnSeq: number;
+  cancelledThrough: number;
 }
 
 export interface RunSummary {
@@ -243,10 +254,21 @@ function persistJournal(entry: RunEntry): void {
   }
 }
 
+// Enqueue a turn. The work chains onto entry.turnQueue so it can't begin until any prior turn has
+// fully settled — guaranteeing one runner.send() at a time on this run's Session. The queue never
+// rejects (execTurn swallows its own errors), so the chain can't break.
 function runTurn(entry: RunEntry, message: string): void {
+  const turnId = ++entry.turnSeq;
+  entry.turnQueue = entry.turnQueue.then(() => execTurn(entry, message, turnId));
+}
+
+function execTurn(entry: RunEntry, message: string, turnId: number): Promise<void> {
+  // Skip a turn that was removed OR cancelled while it sat queued (a Stop / delete during the queue
+  // window takes effect, instead of the turn running once the one ahead of it settles).
+  if (entry.deleted || turnId <= entry.cancelledThrough) return Promise.resolve();
   entry.abort = new AbortController(); // fresh per turn (AbortController is one-shot)
   entry.busy = true;
-  entry.runner
+  return entry.runner
     .send(message, entry.abort.signal)
     .catch(() => {})
     .finally(() => {
@@ -261,7 +283,8 @@ function runTurn(entry: RunEntry, message: string): void {
       } catch (err) {
         console.warn(`[errand] post-turn persistence failed for run ${entry.runId} (continuing):`, err);
       }
-    });
+    })
+    .then(() => {}); // discard send()'s resolved value so the queue stays Promise<void>
 }
 
 export async function startRun(message: string, roots?: string[]): Promise<string> {
@@ -279,6 +302,9 @@ export async function startRun(message: string, roots?: string[]): Promise<strin
     autoApproveReversible: false,
     title: message.slice(0, 80),
     createdAt: Date.now(),
+    turnQueue: Promise.resolve(),
+    turnSeq: 0,
+    cancelledThrough: 0,
     runner: undefined as unknown as AgentRunner,
   };
   entry.runner = new AgentRunner({
@@ -325,6 +351,9 @@ function rehydrate(runId: string): RunEntry | undefined {
     autoApproveReversible: false,
     title: stored.title,
     createdAt: stored.createdAt,
+    turnQueue: Promise.resolve(),
+    turnSeq: 0,
+    cancelledThrough: 0,
     runner: undefined as unknown as AgentRunner,
   };
   entry.runner = new AgentRunner({
@@ -388,6 +417,10 @@ export function setAutoApprove(runId: string, enabled: boolean): boolean {
 export function cancelRun(runId: string): boolean {
   const entry = runs.get(runId);
   if (!entry) return false;
+  // Stop the running turn (abort) AND any turns already queued behind it (cancelledThrough), so a
+  // Stop is never lost to a follow-up that hasn't started yet. A later sendMessage enqueues a fresh
+  // turnId above cancelledThrough, so the user can still steer the run after stopping it.
+  entry.cancelledThrough = entry.turnSeq;
   entry.abort.abort();
   return true;
 }
@@ -403,19 +436,16 @@ export function removeRun(runId: string): void {
   store.deleteRun(runId);
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-// Send a message. If the agent is busy, INTERRUPT the current turn first (the user is
-// steering), wait for it to settle, then run the new instruction.
+// Send a message. If the agent is busy, INTERRUPT the current turn (the user is steering) by
+// aborting it; the new turn is enqueued behind it and the turnQueue guarantees it won't START
+// until the interrupted turn has fully settled — no fixed wait, no chance of two overlapping
+// turns even if a tool ignores the abort signal.
 export async function sendMessage(runId: string, message: string): Promise<"ok" | "missing"> {
   // getRun (not runs.get) so an interrupted run that fell out of memory after a restart can
   // still be continued — it rehydrates from the DB (restored Session + replayed events).
   const entry = getRun(runId);
   if (!entry) return "missing";
-  if (entry.busy) {
-    entry.abort.abort();
-    for (let i = 0; i < 50 && entry.busy; i++) await sleep(100); // let the current turn unwind
-  }
+  if (entry.busy) entry.abort.abort(); // interrupt now; the queue serializes the handoff
   runTurn(entry, message);
   return "ok";
 }

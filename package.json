@@ -30,6 +30,8 @@
     "docwrite:test": "tsx src/docWriteTest.ts",
     "mcp:test": "tsx src/mcpTest.ts",
     "skill:test": "tsx src/skillTest.ts",
+    "migrate:test": "tsx src/migrateTest.ts",
+    "seq:test": "tsx src/seqTest.ts",
     "cli": "tsx src/cli.ts",
     "web": "next dev -p 3200",
     "dev": "next dev -p 3200"

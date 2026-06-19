@@ -72,6 +72,11 @@ export class WebSink implements EventSink {
   // Replay everything with seq >= fromSeq (structural + the recent delta window), in seq order,
   // then receive live events. Returns unsubscribe.
   subscribe(fn: (e: AgentEvent) => void, fromSeq = 0): () => void {
+    // Ordering relies on two things: (1) a STABLE sort, and (2) `buffer` spread BEFORE
+    // `recentDeltas`. A delta borrows its preceding structural event's seq (loop.ts emit), so a
+    // delta can tie ONLY with that one structural event; spreading buffer first + a stable sort
+    // keeps the structural event ahead of its deltas. Don't reorder the spread or swap in an
+    // unstable sort, or streamed deltas would render before the message they belong to.
     const replay = [...this.buffer, ...this.recentDeltas]
       .filter((e) => e.seq >= fromSeq)
       .sort((a, b) => a.seq - b.seq);
