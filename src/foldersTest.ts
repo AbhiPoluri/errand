@@ -4,7 +4,7 @@
 // ERRAND_DATA (a fresh temp dir → a workspace that does NOT exist yet). Run: `npm run folders:test`.
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { rmSync, existsSync, mkdtempSync } from "node:fs";
+import { rmSync, existsSync, mkdtempSync, symlinkSync } from "node:fs";
 
 const dataDir = mkdtempSync(join(tmpdir(), "errand-folderstest-"));
 process.env.ERRAND_DATA = dataDir; // workspaceRoot -> dataDir/workspace, which does not exist yet
@@ -44,6 +44,24 @@ async function main(): Promise<void> {
   // A folder NOT on the allow-list is still rejected (the fix didn't loosen the sandbox guard).
   const bad = folders.checkRoots(["/etc"]);
   check("a non-allowed folder is still rejected", bad.ok === false);
+
+  // --- symlink-escape: checkRoots compares by RESOLVED REAL PATH, not the literal string, so a
+  //     symlink can neither masquerade as an allowed folder nor smuggle in a non-allowed target ---
+  folders.ensureSafeFolder(); // the safe folder is always on the allow-list; make sure it exists
+  // (a) a symlink whose TARGET is the allowed safe folder is accepted — its real path resolves into
+  //     the allow-list, which a naive literal-string check would have rejected.
+  const linkIn = join(dataDir, "link-into-safe");
+  symlinkSync(ws, linkIn);
+  const okLink = folders.checkRoots([linkIn]);
+  check("a symlink pointing AT an allowed folder is accepted (matched by real path)", okLink.ok === true, JSON.stringify(okLink));
+  // (b) a symlink whose own path sits under the data dir but whose TARGET is OUTSIDE every allowed
+  //     root is rejected — it can't masquerade as allowed via its innocuous-looking location.
+  const outside = mkdtempSync(join(tmpdir(), "errand-folders-outside-"));
+  const linkOut = join(dataDir, "link-out");
+  symlinkSync(outside, linkOut);
+  const badLink = folders.checkRoots([linkOut]);
+  check("a symlink whose target is OUTSIDE all allowed roots is rejected", badLink.ok === false, JSON.stringify(badLink));
+  rmSync(outside, { recursive: true, force: true });
 
   rmSync(dataDir, { recursive: true, force: true });
   console.log(`\nRESULT: ${failures === 0 ? "ALL PASS" : `${failures} FAILED`}`);
