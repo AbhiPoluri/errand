@@ -73,10 +73,6 @@ it under needs-attended/needs-user instead of the safe Backlog.
 _(Queued by the 2026-06-19 Discovery #2 pass — 4 parallel scouts (deep), each candidate triaged. Work
 top-down; re-run Discovery when this empties again.)_
 
-- [ ] **(med) Direct unit test for `backfillToolResults`** (`src/session.ts:67-85`): only tested
-  indirectly via resumeTest. Lock: fully-resolved array unchanged; one stranded call → one placeholder;
-  two stranded calls in one assistant message → two placeholders in order; input not mutated. Fold into
-  seqTest (already imports Session) or a new session:test. Additive.
 - [ ] **(med) Cover extractXlsx boolean/formula/error cells** (`src/tools/extract.ts:266-284`): docTest
   only covers `t="s"` + untyped numbers; the `t="b"`→TRUE/FALSE, `t="str"` formula, and `t="e"` error
   branches are unasserted. Add a docTest xlsx fixture with those cell types. Additive.
@@ -108,6 +104,10 @@ top-down; re-run Discovery when this empties again.)_
 
 ## Done log (newest first)
 
+- 2026-06-19 — Direct unit test for backfillToolResults (from Discovery #2). New session:test (10
+  assertions) locks the dedup + multi-strand branches the indirect resumeTest coverage didn't pin:
+  fully-resolved unchanged, 1→1, 2→2 in order, already-resolved gets no duplicate, input not mutated.
+  Additive. tsc clean; 27 offline suites green. `6f5e402`.
 - 2026-06-19 — Cover pack.ts contentToText + isError→uncertain mapping (from Discovery #2). Stub-McpClient
   cases (no spawn) lock the multi-part join / json-stringify / unknown-type fallback / 6000-char
   truncation, the isError→{ok:false,outcome:"uncertain"} safety contract, thrown→uncertain, and the
