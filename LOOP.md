@@ -44,9 +44,9 @@ history/detail lives in `PLAN.md` §11 and `HANDOFF.md`; this file is just the a
 
 ## Backlog (priority order — work the top unblocked item)
 
-- [ ] **Boot-timeout cleanup** (low): if waitForServer times out while the fork is still ALIVE (hung,
-  not crashed), kill that fork before showing the error window so it can't linger holding :3200 / the DB.
-  The crash/exit case is already handled; only the rare hang-without-crash isn't.
+_(empty — no autonomously-safe tasks queued. The next heartbeat should report "no safe task remains"
+and do nothing. The remaining work is all needs-attended / needs-user below; add new safe tasks here
+as they're discovered. Consider pausing the heartbeat — see "Cron heartbeat" note at the bottom.)_
 
 ## Blocked — needs the user / attended (DO NOT attempt unattended in the loop)
 
@@ -69,6 +69,11 @@ history/detail lives in `PLAN.md` §11 and `HANDOFF.md`; this file is just the a
 
 ## Done log (newest first)
 
+- 2026-06-19 — Boot-timeout cleanup (electron): on a waitForServer rejection, kill a still-alive
+  (hung/timed-out) fork and null it so no zombie core lingers behind the error window holding :3200 +
+  the SQLite WAL writer. Crash-exit path no-ops (serverProc already null); guards prevent respawn /
+  before-quit double-act. Adversarial review of all 4 lifecycle interactions → no defects. tsc clean;
+  23 offline suites green. `2b21fc2`. **This emptied the autonomously-safe backlog.**
 - 2026-06-19 — Weak/free-model warning for browser tasks. `modelLikelyWeakForBrowser(id)` flags
   OpenRouter `:free` tiers and sub-8B models (new `modelParamCountB` id parser), never the curated
   presets; surfaced as `browserWeak` from /api/model (GET+POST). Settings shows a soft amber hint by
@@ -116,4 +121,14 @@ history/detail lives in `PLAN.md` §11 and `HANDOFF.md`; this file is just the a
   (paths+key `535cf95`, bootstrap/shutdown `ff99604`); Phase 2 Electron wrap (app `c5bf518`, package
   `068b019`, icon `bf074c6`, .env-strip `150b912`); folders safe-folder auto-create `209a0a3`;
   extension tab-group fix `e20f02c`; set-key utility `646e870`. (Full detail: PLAN §11.)
+
+## Cron heartbeat (what drives this loop)
+
+A **session-only** cron (`CronCreate`, `durable:false`) fires the HEARTBEAT prompt every 10 min while
+the REPL is idle. As of 2026-06-19 the live job is `4461c404` (`7,17,...,57 * * * *`); it replaced the
+prior `ef511639`, which had gone zombie (listed but not firing) after the session it was created in
+ended. **Session-only = dies when Claude closes; recreate it next session** (or use `durable:true` to
+persist across restarts — the user declined that on 2026-06-19, preferring session-only). Auto-expires
+after 7 days regardless. **With the backlog empty, each fire just no-ops** — pause it with
+`CronDelete 4461c404` until there's safe work queued again.
 </content>
