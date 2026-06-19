@@ -1,10 +1,5 @@
 # Errand — Autonomous Loop Queue
 
-> ## ⛔ LOOP STOPPED — paused by the user 2026-06-19 (~01:25)
-> If you are an iteration that just woke up from a stale scheduled wakeup: **the user STOPPED the loop.**
-> Do NOT pick, plan, or run any task. Just note the loop is stopped and end the turn — schedule no new
-> wakeup. To resume, the user re-runs `/loop`; remove this banner when they do.
-
 This is the working queue + rulebook for the self-driving dev loop (run via `/loop`). It is the
 loop's MEMORY: each iteration reads it to decide what to do next, and updates it when done. Full
 history/detail lives in `PLAN.md` §11 and `HANDOFF.md`; this file is just the actionable queue.
@@ -49,16 +44,6 @@ history/detail lives in `PLAN.md` §11 and `HANDOFF.md`; this file is just the a
 
 ## Backlog (priority order — work the top unblocked item)
 
-- [ ] **Phase 3c — resume engine (consume turn_state).** The payoff of 3a+3b: `AgentRunner.resume(state)`
-  that re-enters `send()` at the checkpoint's phase/cursor (skipping already-resolved calls; reversible
-  re-run, permanent → uncertain via a `tool_inflight` marker), re-parks an `awaiting_approval`
-  checkpoint so `/decision` continues the run, and a boot `bootstrap()` classify-and-resume pass. MUST:
-  `reconcileOrphans` should `clearTurnState` for each zombie it settles, and resume must IGNORE/delete a
-  `turn_state` row whose `runs` row is missing/stopped (orphan guard — see the 3b review). Optional:
-  add throttled per-result checkpointing if resume timings warrant finer granularity; harden tool_call
-  id assignment at the source (`id: tc.id || randomUUID()`) to kill the dup/empty-id 400 edge for good.
-  Ship behind `ERRAND_RESUME=1`, flip default after a `resume:test` proving end-to-end resume. (Big —
-  may span iterations.)
 - [ ] **In-app key-entry screen.** A Settings field to enter the OpenRouter key → an IPC/route path →
   `safeStorage` blob (the `set-key.cjs` logic, but from the UI), so a fresh install works without the
   env/CLI. The renderer must never see the key. (Makes the packaged app self-sufficient.)
@@ -73,8 +58,17 @@ history/detail lives in `PLAN.md` §11 and `HANDOFF.md`; this file is just the a
 - [ ] **Weak/free-model warning** for browser tasks (the model picker should warn when a weak model is
   selected for a browser-heavy task; free models flail).
 
-## Blocked — needs the user (DO NOT attempt in the loop)
+## Blocked — needs the user / attended (DO NOT attempt unattended in the loop)
 
+- [needs-attended] **Phase 3c — resume() engine (the risky core).** Foundation DONE (3a schema, 3b
+  400-safe checkpoints, journal-before-mutate, reconcile clears zombie turn_state). REMAINING is a
+  CORE-LOOP refactor that could break every run if wrong, so do it WITH the user, not unattended:
+  `AgentRunner.resume(state)` re-enters `send()` at the checkpoint's phase/cursor (skip resolved calls;
+  reversible re-run, permanent → uncertain via a `tool_inflight` marker), re-park an `awaiting_approval`
+  checkpoint so `/decision` continues the run, a boot classify-and-resume pass, all behind
+  `ERRAND_RESUME=1` (flip default only after a `resume:test` proving end-to-end resume). Optional
+  hardening: throttled per-result checkpoint; `id: tc.id || randomUUID()` at the source for the
+  dup/empty-id 400 edge. The whole persistence spine it needs is already built + tested.
 - [needs-user] **Signing + notarization** of Errand.app — requires the user's Apple Developer identity.
 - [needs-user] **v8 Gmail read+triage+draft** — requires the user to set up Google OAuth + authorize.
 - [needs-user] **v9 Calendar** — rides the v8 Google grant.
@@ -82,6 +76,9 @@ history/detail lives in `PLAN.md` §11 and `HANDOFF.md`; this file is just the a
 
 ## Done log (newest first)
 
+- 2026-06-19 — Phase 3c foundation: `reconcileOrphans` clears a settled zombie's `turn_state` (the
+  resume-safety orphan guard), atomically in its tx. `restart:test` extended. The rest of 3c (the
+  resume() engine — re-entering the loop) moved to needs-attended (risky core-loop refactor). `d229913`.
 - 2026-06-19 — journal-before-mutate: synchronous `Journal.onRecord` hook persists the Undo manifest at
   record-time (inside tool.run, no async yield) instead of on the later tool.result event — closes the
   un-undoable-after-restart window. Wired in runRegistry (both paths); idempotent vs the existing
