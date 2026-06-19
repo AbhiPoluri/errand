@@ -94,6 +94,7 @@ const g = globalThis as unknown as {
   __errandReconciled?: boolean;
   __errandMcp?: McpManager;
   __errandMcpConfigured?: boolean;
+  __errandShutdownWired?: boolean;
 };
 const runs: Map<string, RunEntry> = (g.__errandRuns ??= new Map());
 
@@ -103,29 +104,76 @@ const mcpManager: McpManager = (g.__errandMcp ??= new McpManager());
 export function getMcpManager(): McpManager {
   return mcpManager;
 }
-if (!g.__errandMcpConfigured) {
-  g.__errandMcpConfigured = true;
-  // Fire-and-forget: warm up connections to enabled servers at boot. A run that starts before a
-  // server finishes connecting simply won't see its tools yet (the next run will) — never blocks boot.
-  mcpManager.configure(loadMcpServers()).catch((e) => console.warn("[errand] MCP initial configure failed:", e));
+// ---- lifecycle: the explicit, idempotent boot + shutdown a HOST owns ----
+// Both startup side effects (reconcile zombie runs from a previous process, warm up MCP servers)
+// live in ONE named function instead of bare module-eval, so a host runs them in a controlled order
+// AFTER it has set the data paths + key: Next via the module-init call at the bottom of this block
+// (which completes before any route body runs — preserving "reconcile before any getRun"), and the
+// future Electron main process by calling bootstrap() itself at app.whenReady. Idempotent via the
+// globalThis flags, so a double-call is a harmless no-op.
+export function bootstrap(): void {
+  if (!g.__errandMcpConfigured) {
+    g.__errandMcpConfigured = true;
+    // Fire-and-forget: warm up connections to enabled servers. A run that starts before a server
+    // finishes connecting just won't see its tools yet (the next run will) — never blocks boot.
+    mcpManager.configure(loadMcpServers()).catch((e) => console.warn("[errand] MCP initial configure failed:", e));
+  }
+  if (!g.__errandReconciled) {
+    g.__errandReconciled = true;
+    // A reconcile FAILURE must degrade to "didn't tidy the zombies", never "the server won't start".
+    try {
+      const n = store.reconcileOrphans(new Set(runs.keys()));
+      if (n) console.log(`[errand] reconciled ${n} interrupted run(s) from a previous session`);
+    } catch (e) {
+      console.warn("[errand] orphan reconciliation failed (continuing):", e);
+    }
+  }
+  wireShutdown();
 }
 
-// Once per process (NOT per HMR re-eval — the flag lives on globalThis): any run the DB still
-// calls 'working' is a zombie from a killed process. Reconcile it to an interrupted state so
-// it never hangs the UI. `runs` is empty at a true boot; passing its keys is belt-and-braces
-// so an HMR edge can never mark a genuinely-live run as interrupted.
-if (!g.__errandReconciled) {
-  g.__errandReconciled = true;
-  // This runs at module-init time, before any route can serve — so a throw here would brick
-  // EVERY /api/runs/* route at boot. Guard it: a reconcile failure must degrade to "didn't
-  // tidy up the zombies", never "the server won't start".
+// Release the EXTERNAL resources the core owns: MCP stdio child processes + the Playwright Chrome
+// context. Nothing else holds these, so without an explicit release they orphan when the process
+// dies (a stray Chrome window / node children lingering after the user "quits"). Best-effort +
+// idempotent; never throws. Electron main will call this from app 'before-quit' (a proper async
+// window); under `next dev` the signal handlers below call it best-effort.
+let shuttingDown = false;
+export async function shutdown(): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
   try {
-    const n = store.reconcileOrphans(new Set(runs.keys()));
-    if (n) console.log(`[errand] reconciled ${n} interrupted run(s) from a previous session`);
+    mcpManager.closeAll();
   } catch (e) {
-    console.warn("[errand] orphan reconciliation failed (continuing):", e);
+    console.warn("[errand] MCP shutdown failed (continuing):", e);
+  }
+  try {
+    // Lazy import so merely importing runRegistry never pulls playwright-core into a non-browser route.
+    const { disconnect } = await import("./browser.ts");
+    await disconnect();
+  } catch (e) {
+    console.warn("[errand] browser shutdown failed (continuing):", e);
   }
 }
+
+function wireShutdown(): void {
+  if (g.__errandShutdownWired) return;
+  g.__errandShutdownWired = true;
+  // Best-effort cleanup on dev-server exit. We do NOT call process.exit — the host owns the exit; we
+  // only release our external resources so they don't orphan. (Electron wires app 'before-quit' to
+  // shutdown() for a guaranteed async window; signal-time async cleanup here is best-effort.)
+  const onSignal = () => {
+    void shutdown();
+  };
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
+  process.once("beforeExit", onSignal);
+}
+
+// Next has no "app start" hook inside route handlers, so trigger the boot step on the first import
+// of this module (every /api/runs/* route imports it). It completes before the route body runs, so
+// the "reconcile before any getRun" ordering holds. Electron main will instead set the env, import
+// the core, then call bootstrap() explicitly — the idempotent guards make this module-init call a
+// no-op there. (Migrating Next to an instrumentation.ts register() hook is a Phase-2 refinement.)
+bootstrap();
 
 function buildRegistry(): Registry {
   // The packs the user has enabled in Settings (defaults to the no-auth consumer surface
