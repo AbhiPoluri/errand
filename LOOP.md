@@ -73,13 +73,6 @@ it under needs-attended/needs-user instead of the safe Backlog.
 _(Queued by the 2026-06-19 Discovery #2 pass — 4 parallel scouts (deep), each candidate triaged. Work
 top-down; re-run Discovery when this empties again.)_
 
-- [ ] **(high) Cover journalRestore copy + make_folder inverses** (`src/server/journalRestore.ts:36,41`):
-  the restart-Undo fallback; restart:test only end-to-end-undoes move/write/delete/rename, never a
-  reconstructed `copy` or `make_folder` inverse — so the make_folder "only remove if still EMPTY (never
-  delete a folder the user filled)" safety guard is asserted by nothing. Extend restart:test: rebuild a
-  journal from persisted copy + make_folder manifests, undoAll, assert copy-inverse removes the copy,
-  make_folder removes an empty created dir, make_folder LEAVES a now-non-empty dir, + corrupt
-  make_folder/delete manifests → no inverse. Additive. Verify: restart:test + tsc + full suite.
 - [ ] **(high) Cover pack.ts contentToText + isError→uncertain mapping** (`src/server/mcp/pack.ts:35-44,
   89-92`): mcpTest only drives the fake server's single text part, so the multi-part join, `json`-part
   stringify, unknown-type fallback, MAX_MCP_TEXT truncation (`…[truncated]`), and critically the
@@ -122,6 +115,11 @@ top-down; re-run Discovery when this empties again.)_
 
 ## Done log (newest first)
 
+- 2026-06-19 — Cover journalRestore copy + make_folder reconstructed inverses (from Discovery #2). The
+  restart-Undo fallback only E2E-undid move/write/delete/rename; now the copy inverse (removes the copy),
+  make_folder inverse (removes an empty created dir), and critically the "LEAVES a folder the user
+  filled" safety guard are exercised, + corrupt make_folder/delete manifests → no inverse. Additive.
+  tsc clean; 26 suites green. `2c4c066`.
 - 2026-06-19 — Fix the length/content_filter tool_call strand (from Discovery #2). A model cut off
   (finish_reason "length") or filtered ("content_filter") WHILE emitting tool_calls left an assistant
   tool_calls message with no matching tool result → every follow-up turn 400'd, wedging the conversation.
