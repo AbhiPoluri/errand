@@ -19,6 +19,7 @@ import { rebuildJournalFromStore } from "./journalRestore.ts";
 import { McpManager } from "./mcp/manager.ts";
 import { loadMcpServers } from "./mcp/config.ts";
 import { skillsSummary } from "./skills.ts";
+import { ensureSafeFolder } from "./folders.ts";
 
 // Reflect after a task settles — only if dreaming is on, debounced so it doesn't run
 // after every turn. Fire-and-forget; failures are silent.
@@ -112,6 +113,10 @@ export function getMcpManager(): McpManager {
 // future Electron main process by calling bootstrap() itself at app.whenReady. Idempotent via the
 // globalThis flags, so a double-call is a harmless no-op.
 export function bootstrap(): void {
+  // Make Errand's own safe-folder sandbox so the default run scope always works (a fresh install —
+  // especially the packaged app, whose workspace is under userData — otherwise fails every default
+  // run with "couldn't open that folder"). Idempotent; folders.ts also ensures it on every listing.
+  ensureSafeFolder();
   if (!g.__errandMcpConfigured) {
     g.__errandMcpConfigured = true;
     // Fire-and-forget: warm up connections to enabled servers. A run that starts before a server

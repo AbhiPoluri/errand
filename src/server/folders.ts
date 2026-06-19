@@ -3,8 +3,21 @@
 // in-app sandbox. resolveWithin() still confines every op to the chosen root.
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { statSync, accessSync, realpathSync, constants } from "node:fs";
+import { statSync, accessSync, realpathSync, mkdirSync, constants } from "node:fs";
 import { config } from "../config.ts";
+
+// Errand's "safe folder" is its OWN sandbox (config.workspaceRoot) — so we create it if it doesn't
+// exist yet. Without this a fresh install fails EVERY default-scoped run with "couldn't open that
+// folder": the picker always offers the safe folder, the UI defaults to it, but the directory was
+// never made — most visibly in the packaged app, whose workspace lives under userData. This is the
+// only folder Errand creates; the others are the user's real, pre-existing folders. Idempotent.
+export function ensureSafeFolder(): void {
+  try {
+    mkdirSync(config.workspaceRoot, { recursive: true });
+  } catch {
+    // If it genuinely can't be created (odd permissions), the usable-dir checks below report it calmly.
+  }
+}
 
 export interface FolderOption {
   key: string;
@@ -25,6 +38,7 @@ function dirUsable(p: string): boolean {
 
 // The folders we OFFER — only those that exist and are writable are returned.
 export function availableFolders(): FolderOption[] {
+  ensureSafeFolder(); // the safe sandbox always exists once we list folders
   const home = homedir();
   const candidates: FolderOption[] = [
     { key: "workspace", label: "Errand's safe folder", path: config.workspaceRoot, safe: true },
