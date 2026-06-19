@@ -44,9 +44,6 @@ history/detail lives in `PLAN.md` §11 and `HANDOFF.md`; this file is just the a
 
 ## Backlog (priority order — work the top unblocked item)
 
-- [ ] **In-app key-entry screen.** A Settings field to enter the OpenRouter key → an IPC/route path →
-  `safeStorage` blob (the `set-key.cjs` logic, but from the UI), so a fresh install works without the
-  env/CLI. The renderer must never see the key. (Makes the packaged app self-sufficient.)
 - [ ] **`instrumentation.ts` boot refinement.** Move `bootstrap()` out of the runRegistry module-eval
   call into a Next `instrumentation.ts` `register()` hook (+ `experimental.instrumentationHook`),
   guarded on `NEXT_RUNTIME==='nodejs'`, so the boot step is explicit (Electron-ready). Verify the dev
@@ -76,6 +73,12 @@ history/detail lives in `PLAN.md` §11 and `HANDOFF.md`; this file is just the a
 
 ## Done log (newest first)
 
+- 2026-06-19 — in-app OpenRouter key entry: Settings field → POST /api/key → main process
+  (safeStorage) → encrypt + restart. Renderer never sees the key; web-mode hidden. Security review
+  → no leaks; fixed a restart port-rebind race + key-shape check. Verified live (renders + GET +
+  boot). `3917aad`. Follow-ups: (a) user should smoke-test the full save→restart once (not
+  auto-tested — would overwrite the real key); (b) to get it in the packaged Errand.app, repackage
+  (`npm run dist`).
 - 2026-06-19 — Phase 3c foundation: `reconcileOrphans` clears a settled zombie's `turn_state` (the
   resume-safety orphan guard), atomically in its tx. `restart:test` extended. The rest of 3c (the
   resume() engine — re-entering the loop) moved to needs-attended (risky core-loop refactor). `d229913`.
