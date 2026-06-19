@@ -44,8 +44,6 @@ history/detail lives in `PLAN.md` §11 and `HANDOFF.md`; this file is just the a
 
 ## Backlog (priority order — work the top unblocked item)
 
-- [ ] **Weak/free-model warning** for browser tasks (the model picker should warn when a weak model is
-  selected for a browser-heavy task; free models flail).
 - [ ] **Boot-timeout cleanup** (low): if waitForServer times out while the fork is still ALIVE (hung,
   not crashed), kill that fork before showing the error window so it can't linger holding :3200 / the DB.
   The crash/exit case is already handled; only the rare hang-without-crash isn't.
@@ -71,6 +69,14 @@ history/detail lives in `PLAN.md` §11 and `HANDOFF.md`; this file is just the a
 
 ## Done log (newest first)
 
+- 2026-06-19 — Weak/free-model warning for browser tasks. `modelLikelyWeakForBrowser(id)` flags
+  OpenRouter `:free` tiers and sub-8B models (new `modelParamCountB` id parser), never the curated
+  presets; surfaced as `browserWeak` from /api/model (GET+POST). Settings shows a soft amber hint by
+  the model picker ONLY when a weak model is selected AND the browser pack is on, refreshed live on a
+  model/endpoint switch (applyModelResp). Hint, not a block. New `models:test` (17 assertions);
+  tsc clean; 23 offline suites green. Adversarial review → no defects (regex doesn't misfire on
+  gpt-4.1/gemini-2.5/q4_K_M/MoE ids; `<8` boundary correct). `6eab090`. ⚠️ visual appearance to be
+  eyeballed in a real app run (attended) — logic + wiring verified, pixels not.
 - 2026-06-19 — Polish / adversarial-review sweep over the Electron + folders + extension changes. A
   3-phase review workflow surfaced 8 confirmed-real findings (1 false positive correctly rejected); all
   fixed: electron lifecycle hardening (boot preflight + waitForServer reject-on-exit + error view; async
