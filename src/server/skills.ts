@@ -1,9 +1,11 @@
 // Skills = named, reusable procedures the agent can apply. Each is a folder under the skills dir with
 // a SKILL.md (optional `---` frontmatter: name/description/when_to_use, then a markdown body of steps).
 // Mirrors Anthropic Agent Skills so they're portable. App-managed location (NOT a user folder) —
-// reads ERRAND_SKILLS / defaults to <cwd>/skills (computed here, not via config, so tests run offline).
+// path via paths.skillsRoot() (ERRAND_SKILLS > ERRAND_DATA-derived > cwd/skills); paths.ts is
+// side-effect-free and config-free, so tests/headless runs stay offline.
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { skillsRoot } from "../paths.ts";
 
 export interface Skill {
   name: string;
@@ -14,7 +16,7 @@ export interface Skill {
 }
 
 export function skillsDir(): string {
-  return process.env.ERRAND_SKILLS ?? join(process.cwd(), "skills");
+  return skillsRoot();
 }
 
 export const MAX_SKILL_BYTES = 100_000; // a SKILL.md larger than this is pathological — skip it on read

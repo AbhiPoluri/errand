@@ -2,16 +2,17 @@
 // Stores every run's metadata, full AgentEvent stream (for replay), and the session
 // messages (so a conversation can be continued after a server restart).
 import { DatabaseSync } from "node:sqlite";
-import { join } from "node:path";
 import type { AgentEvent } from "../events.ts";
 import type { OpManifest } from "../journal.ts";
 import type { RunSummary } from "./runRegistry.ts";
 import { embed, embedMany, cosineSimilarity } from "./embed.ts";
+import { dbPath } from "../paths.ts";
 
-// One DB per machine, beside the app. Reused across HMR via globalThis. ERRAND_DB lets
-// tests point at an isolated temp file so they never touch the real errand.db.
+// One DB per machine. Reused across HMR via globalThis. The path comes from paths.dbPath()
+// (ERRAND_DB > ERRAND_DATA-derived > cwd) so tests point at an isolated temp file and an Electron
+// host points at userData — read lazily, so the env set just before this import is always honored.
 const g = globalThis as unknown as { __errandDb?: DatabaseSync };
-const db = (g.__errandDb ??= new DatabaseSync(process.env.ERRAND_DB ?? join(process.cwd(), "errand.db")));
+const db = (g.__errandDb ??= new DatabaseSync(dbPath()));
 
 // Hot-path durability tuning. The agent fires an appendEvent per non-delta event, and the
 // default rollback journal + synchronous=FULL forces a full fsync on each one. WAL collapses

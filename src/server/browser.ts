@@ -5,9 +5,9 @@
 // Chrome). A singleton on globalThis survives Next dev HMR.
 import { chromium, type BrowserContext, type Page, type ElementHandle } from "playwright-core";
 import { spawn } from "node:child_process";
-import { homedir } from "node:os";
 import { join, basename } from "node:path";
 import { existsSync } from "node:fs";
+import { browserProfileRoot } from "../paths.ts";
 
 export interface Interactive {
   index: number;
@@ -72,7 +72,7 @@ export async function connect(browserKey?: string): Promise<{ connected: boolean
     return { connected: false, error: msg };
   }
   const pick = (browserKey && available.find((b) => b.key === browserKey)) || available[0];
-  const profileDir = join(homedir(), `.errand-${pick.key}`);
+  const profileDir = join(browserProfileRoot(), `.errand-${pick.key}`);
 
   try {
     const context = await chromium.launchPersistentContext(profileDir, {
@@ -124,7 +124,7 @@ export async function openForSignIn(browserKey?: string): Promise<{ ok: boolean;
     return { ok: false, error: "No supported browser found to sign in with." };
   }
   const pick = (browserKey && available.find((b) => b.key === browserKey)) || available[0];
-  const profileDir = join(homedir(), `.errand-${pick.key}`);
+  const profileDir = join(browserProfileRoot(), `.errand-${pick.key}`);
   // Free the profile if Errand currently has it open under automation (single-use lock).
   if (state.browserKey === pick.key) await disconnect();
   try {

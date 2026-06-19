@@ -32,6 +32,7 @@
     "skill:test": "tsx src/skillTest.ts",
     "migrate:test": "tsx src/migrateTest.ts",
     "seq:test": "tsx src/seqTest.ts",
+    "paths:test": "tsx src/pathsTest.ts",
     "cli": "tsx src/cli.ts",
     "web": "next dev -p 3200",
     "dev": "next dev -p 3200"

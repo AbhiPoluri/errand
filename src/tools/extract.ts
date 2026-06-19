@@ -12,6 +12,7 @@
 import { inflateRawSync, deflateRawSync } from "node:zlib";
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
+import { ocrCacheRoot } from "../paths.ts";
 
 export type DocKind = "pdf" | "docx" | "xlsx";
 
@@ -93,9 +94,10 @@ export function isImageFile(path: string, head: Buffer): boolean {
 // Read per-call (not at module load) so it's overridable in tests. (default 45s)
 const ocrTimeoutMs = (): number => Number(process.env.OCR_TIMEOUT_MS) || 45_000;
 // Stable cache dir for the downloaded language model so it isn't re-fetched from the CDN every
-// call (default is CWD). First online call downloads it; an offline first call fails soft via
-// the timeout above rather than hanging.
-const OCR_CACHE_DIR = join(process.cwd(), ".tesseract-cache");
+// call. Via paths.ocrCacheRoot() (ERRAND_CACHE > ERRAND_DATA-derived > cwd/.tesseract-cache) so an
+// Electron host caches under userData. First online call downloads it; an offline first call fails
+// soft via the timeout above rather than hanging.
+const OCR_CACHE_DIR = ocrCacheRoot();
 
 // OCR an image to text. Returns null if OCR fails, times out, OR finds no readable text (so
 // the caller says "it's an image, no text" honestly rather than claiming success on an empty

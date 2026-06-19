@@ -176,7 +176,20 @@ function currentClient() {
 // into an immediate, specific error the run route can show. Always ok for non-Ollama endpoints.
 export async function preflightEndpoint(): Promise<{ ok: true } | { ok: false; problem: string }> {
   const ep = currentEndpoint();
-  if (ep.key !== "ollama") return { ok: true };
+  if (ep.key !== "ollama") {
+    // Cloud endpoints need a key. Resolve it exactly as currentClient() does; a missing key becomes
+    // a calm, actionable message at run start instead of an opaque 401 mid-run. (config no longer
+    // throws at import when the key is absent — see config.ts — so this is the place that catches it.)
+    const key = ep.apiKey ?? (ep.apiKeyEnv ? process.env[ep.apiKeyEnv] : "") ?? "";
+    if (!key) {
+      return {
+        ok: false,
+        problem:
+          "Add your OpenRouter API key to use the cloud model — set OPENROUTER_API_KEY, or switch to a local Ollama model in Settings → Model.",
+      };
+    }
+    return { ok: true };
+  }
   const tagsUrl = ep.baseURL.replace(/\/v1\/?$/, "") + "/api/tags";
   try {
     const res = await fetch(tagsUrl, { signal: AbortSignal.timeout(2500) });
