@@ -133,21 +133,20 @@ function readPage() {
       }
     }
   };
-  // 1) Controls inside an OPEN overlay (dialog/menu/flyout/listbox) go FIRST — so when a click opens
-  //    a confirmation dialog (e.g. Gmail's "Unsubscribe?") or a Settings panel, its controls LEAD the
-  //    list instead of being pushed past the cap by the persistent toolbar/nav (what made it loop).
-  const overlays = [];
-  const overlayRoots = [];
+  // A) MODAL FIRST. A real modal (a confirm dialog like Gmail's "Unsubscribe?") BLOCKS the rest of
+  //    the page, so read ONLY it. This is essential: otherwise the page's own controls (e.g. the
+  //    email's "Unsubscribe" LINK) sit in the list right next to the dialog's "Unsubscribe" BUTTON
+  //    with identical labels, and the agent clicks the wrong one and loops. Detect by aria-modal /
+  //    alertdialog, plus a bounded fallback for a role-less centered overlay holding buttons.
+  let modal = null;
   try {
-    // ARIA modals + menus. alertdialog matters: Gmail/Material CONFIRM dialogs use role="alertdialog".
-    for (const o of document.querySelectorAll(
-      '[role=dialog], [role=alertdialog], [aria-modal="true"], [role=menu], [role=listbox], [role=menubar], [role=tablist]',
-    )) {
-      if (isVisible(o)) overlayRoots.push(o);
+    for (const m of document.querySelectorAll('[aria-modal="true"], [role=alertdialog]')) {
+      if (isVisible(m)) {
+        modal = m;
+        break;
+      }
     }
-    // Fallback for a role-less modal: the top-most visible fixed/positioned box that holds buttons.
-    // Only runs when no ARIA modal was found (so it's cheap on the common path), and is bounded.
-    if (!overlayRoots.some((o) => /dialog/.test(o.getAttribute("role") || "") || o.getAttribute("aria-modal") === "true")) {
+    if (!modal) {
       let best = null;
       let bestZ = 0;
       let scanned = 0;
@@ -157,22 +156,39 @@ function readPage() {
         const cs = getComputedStyle(el);
         if (cs.position !== "fixed" && cs.position !== "absolute") continue;
         const z = parseInt(cs.zIndex, 10) || 0;
-        if (z < 1) continue;
+        if (z < 10) continue; // a real modal sits well above the page
         const r = el.getBoundingClientRect();
         if (r.width < 200 || r.height < 80) continue; // skip tiny toasts/badges
-        if (!el.querySelector("button, [role=button]")) continue; // a real action surface
+        if (r.width > innerWidth * 0.97 && r.height > innerHeight * 0.97) continue; // skip full-page wrappers
+        if (!el.querySelector("button, [role=button]")) continue;
         if (z >= bestZ) {
           bestZ = z;
           best = el;
         }
       }
-      if (best) overlayRoots.unshift(best);
+      modal = best;
     }
-    for (const o of overlayRoots) collect(o, overlays, CAP);
   } catch {}
-  // 2) Then the rest of the page (shadow-pierced, deduped against the overlays via `seen`).
+
+  const overlays = [];
+  if (modal) {
+    collect(modal, overlays, CAP); // ONLY the modal's controls
+  } else {
+    // B) No modal: surface any OPEN non-blocking overlay (menu/flyout/listbox/side panel) FIRST so its
+    //    controls lead the list (a Settings panel/dropdown shouldn't be buried under the toolbar)…
+    try {
+      const overlayRoots = [];
+      for (const o of document.querySelectorAll(
+        '[role=dialog], [role=menu], [role=listbox], [role=menubar], [role=tablist]',
+      )) {
+        if (isVisible(o)) overlayRoots.push(o);
+      }
+      for (const o of overlayRoots) collect(o, overlays, CAP);
+    } catch {}
+  }
+  // …then the rest of the page (skipped entirely when a modal is open — it's inert behind the modal).
   const rest = [];
-  collect(document, rest, 240);
+  if (!modal) collect(document, rest, 240);
   const ordered = overlays.concat(rest);
 
   const elements = [];
