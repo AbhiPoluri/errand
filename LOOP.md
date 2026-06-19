@@ -44,12 +44,6 @@ history/detail lives in `PLAN.md` §11 and `HANDOFF.md`; this file is just the a
 
 ## Backlog (priority order — work the top unblocked item)
 
-- [ ] **`instrumentation.ts` boot refinement.** Move `bootstrap()` out of the runRegistry module-eval
-  call into a Next `instrumentation.ts` `register()` hook (+ `experimental.instrumentationHook`),
-  guarded on `NEXT_RUNTIME==='nodejs'`, so the boot step is explicit (Electron-ready). Verify the dev
-  server + standalone server still reconcile before serving.
-- [ ] **Browser: Gmail email-row open reliability.** The one Gmail step still finicky (opening an email
-  row). Diagnose from the reader/click path; make it robust. (Extension change → note it needs a reload.)
 - [ ] **Polish / adversarial-review sweep** over this session's Electron + folders + extension changes —
   surface and fix any real findings.
 - [ ] **Weak/free-model warning** for browser tasks (the model picker should warn when a weak model is
@@ -66,6 +60,9 @@ history/detail lives in `PLAN.md` §11 and `HANDOFF.md`; this file is just the a
   `ERRAND_RESUME=1` (flip default only after a `resume:test` proving end-to-end resume). Optional
   hardening: throttled per-result checkpoint; `id: tc.id || randomUUID()` at the source for the
   dup/empty-id 400 edge. The whole persistence spine it needs is already built + tested.
+- [needs-attended] **Browser: Gmail email-row open reliability.** The one Gmail step still finicky.
+  An extension change that can only be VERIFIED with a real logged-in browser + an extension reload —
+  not autonomously checkable, so do it attended. (Diagnose from the reader/click path in background.js.)
 - [needs-user] **Signing + notarization** of Errand.app — requires the user's Apple Developer identity.
 - [needs-user] **v8 Gmail read+triage+draft** — requires the user to set up Google OAuth + authorize.
 - [needs-user] **v9 Calendar** — rides the v8 Google grant.
@@ -73,6 +70,9 @@ history/detail lives in `PLAN.md` §11 and `HANDOFF.md`; this file is just the a
 
 ## Done log (newest first)
 
+- 2026-06-19 — instrumentation.ts: register() runs bootstrap() at server startup (explicit boot hook,
+  Next instrumentationHook flag), module-init kept as idempotent fallback. Standalone smoke confirmed
+  register() fires before serving. `88c6869`.
 - 2026-06-19 — in-app OpenRouter key entry: Settings field → POST /api/key → main process
   (safeStorage) → encrypt + restart. Renderer never sees the key; web-mode hidden. Security review
   → no leaks; fixed a restart port-rebind race + key-shape check. Verified live (renders + GET +
