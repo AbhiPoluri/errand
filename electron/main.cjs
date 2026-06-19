@@ -309,6 +309,18 @@ app.whenReady().then(async () => {
   } catch (e) {
     bootError = e.message;
     console.error(`[errand] ${e.message}`);
+    // A crash-exit already nulled serverProc (its exit handler); a TIMEOUT leaves the fork ALIVE but
+    // unresponsive (hung). Kill that zombie so it can't linger behind the error window holding :3200 +
+    // the SQLite WAL writer. booting is still true here, and we null serverProc, so neither the crash
+    // handler nor before-quit treats this exit as something to respawn or wait on.
+    if (serverProc) {
+      try {
+        serverProc.kill();
+      } catch {
+        /* already gone */
+      }
+      serverProc = null;
+    }
   } finally {
     booting = false;
   }
