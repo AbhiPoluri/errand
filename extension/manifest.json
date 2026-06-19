@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Errand Browser Helper",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Lets Errand do tasks in your browser tabs — read pages, click, and type, with your permission.",
   "permissions": ["tabs", "scripting", "activeTab", "alarms", "storage", "tabGroups", "debugger"],
   "host_permissions": ["<all_urls>", "http://localhost:3200/*"],

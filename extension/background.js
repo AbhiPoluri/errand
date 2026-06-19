@@ -14,8 +14,11 @@ async function getWorkTabId() {
   const r = await chrome.storage.session.get("workTabId");
   return r.workTabId ?? null;
 }
-async function setWorkTabId(id) {
-  await chrome.storage.session.set({ workTabId: id });
+// `owned` = Errand CREATED this tab (vs. borrowed the user's active tab in the web app). It's the
+// ownership signal resolveTab() uses to decide reuse in desktop mode — tracked explicitly rather than
+// inferred from tab-group membership, which is wrong when grouping fails ("proceed ungrouped").
+async function setWorkTabId(id, owned = false) {
+  await chrome.storage.session.set({ workTabId: id, workTabOwned: id != null && owned });
 }
 
 // True when the Errand UI is open as a Chrome TAB — i.e., the WEB app. In the desktop (Electron)
@@ -36,7 +39,16 @@ async function resolveTab() {
   if (saved != null) {
     try {
       const t = await chrome.tabs.get(saved);
-      if (t && !isErrandTab(t)) return t;
+      // Reuse a saved tab ONLY if Errand itself created it (workTabOwned) or we're the WEB app (the UI
+      // is a Chrome tab, where "work on the tab you're looking at" is the point). In the DESKTOP app the
+      // saved id can be a tab we merely BORROWED from the user in a prior web-app session — reusing it
+      // would re-hijack the user's own tab, the exact bug v0.2.1 fixed on the create path. If it fails
+      // that ownership/mode check, drop it and fall through to a fresh grouped tab.
+      if (t && !isErrandTab(t)) {
+        const { workTabOwned } = await chrome.storage.session.get("workTabOwned");
+        if (workTabOwned === true || (await errandUiOpenInChrome())) return t;
+      }
+      await setWorkTabId(null); // stale UI/borrowed tab — don't let it linger across a web→desktop switch
     } catch {
       /* tab was closed */
     }
@@ -49,13 +61,13 @@ async function resolveTab() {
   if (await errandUiOpenInChrome()) {
     const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     if (active && !isErrandTab(active)) {
-      await setWorkTabId(active.id);
+      await setWorkTabId(active.id, false); // borrowed the user's tab (web app only) — not Errand-owned
       return active;
     }
   }
   // Dedicated BACKGROUND tab in a labeled "Errand" group — no focus-steal; click the group to watch.
   const created = await chrome.tabs.create({ url: "about:blank", active: false });
-  await setWorkTabId(created.id);
+  await setWorkTabId(created.id, true); // Errand created it → owned + reusable even if grouping fails
   await groupTab(created.id);
   return created;
 }
