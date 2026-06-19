@@ -73,11 +73,6 @@ it under needs-attended/needs-user instead of the safe Backlog.
 _(Queued by the 2026-06-19 Discovery pass — 4 parallel scouts across the codebase, each candidate
 triaged. Work top-down; re-run Discovery when this empties again.)_
 
-- [ ] **(med) MCP onClose idempotency** (`src/server/mcp/client.ts:67`): `onClose` runs fully on every
-  transport close; the over-long-line path in `transport.ts` fires close twice, so the 2nd overwrites
-  `closeErr` with a generic message and re-fires `onDisconnect`, masking the real reason. Add
-  `if (this.closed) return;` at the top of `onClose`; add an `mcpTest.ts` case driving a double-close via
-  the stub transport and asserting `onDisconnect` fires once + the first (real) reason is preserved.
 - [ ] **(med) Lock the folders symlink-escape defense** (`src/server/folders.ts:68` `checkRoots`):
   `foldersTest.ts` only checks a plain non-allowed path, never the realpath/symlink comparison that stops
   a symlink masquerading as an allowed folder. Add temp-dir cases: a symlink whose target is inside an
@@ -122,6 +117,12 @@ triaged. Work top-down; re-run Discovery when this empties again.)_
 
 ## Done log (newest first)
 
+- 2026-06-19 — MCP onClose idempotency (from Discovery #1). A transport can fire close twice (over-long
+  path reports the real reason, then the killed child's exit fires close() again with no error); onClose
+  ran both times, overwriting `closeErr` with a generic message + double-firing onDisconnect. Added
+  `if (this.closed) return` (first close wins). mcpTest drives a double-close via a fake transport: 4
+  assertions (onDisconnect once, real reason preserved, isClosed, post-close request rejects with the
+  real reason). tsc clean; 26 offline suites green. `9e8e172`.
 - 2026-06-19 — Fix the stuck approval card (from Discovery #1). `decide()` never read the decision
   POST and only cleared the amber card on the `approval.resolved` SSE — so when `runRegistry.decide()`
   returned false (run evicted/restarted, or approval expired server-side) the card wedged forever on
