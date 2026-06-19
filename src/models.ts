@@ -117,3 +117,25 @@ export function modelSupportsVision(id: string): boolean {
   if (preset) return !!preset.vision;
   return /gemini|gpt-4|gpt-5|claude|llava|llama-?3\.2-vision|-vl\b|vision|pixtral|qwen2?\.?5?-vl/i.test(id);
 }
+
+// Rough parameter count (in billions) encoded in a model id, e.g. "...-3b-instruct" → 3,
+// "qwen2.5:7b" → 7. Returns null when the id doesn't carry a size (most cloud ids). Only used for the
+// soft weak-model hint below — never for routing.
+export function modelParamCountB(id: string): number | null {
+  const m = (id || "").match(/(?:^|[^a-z0-9])(\d+(?:\.\d+)?)\s*b(?:[^a-z0-9]|$)/i);
+  return m ? parseFloat(m[1]) : null;
+}
+
+// Is this model likely too WEAK to reliably drive a browser task (multi-step tool use, usually needing
+// to read the screen)? Free OpenRouter tiers and small local models tend to flail — they loop,
+// mis-call tools, or can't see — so the UI shows a soft warning when one is picked while the browser
+// pack is on. A HINT only: never a block, and the curated presets (all browser-capable) are never
+// flagged. `endpointKey` is accepted for future per-endpoint nuance; the signals today are id-based.
+export function modelLikelyWeakForBrowser(id: string, _endpointKey?: string): boolean {
+  if (!id) return false;
+  if (MODEL_PRESETS.some((p) => p.id === id)) return false; // curated presets are all capable
+  if (/:free\b/i.test(id)) return true; // OpenRouter free tiers flail on agentic tool use
+  const pb = modelParamCountB(id);
+  if (pb != null && pb < 8) return true; // sub-8B models are hit-or-miss at multi-step tool calling
+  return false;
+}

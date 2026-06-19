@@ -3,7 +3,7 @@
 // accepted; presets are the easy path. The OpenRouter API key never leaves the server.
 import { NextRequest, NextResponse } from "next/server";
 import { config } from "../../../src/config.ts";
-import { MODEL_PRESETS, ENDPOINTS, listOllamaModels, normalizeOllamaBaseUrl, DEFAULT_OLLAMA_BASE_URL, modelSupportsVision } from "../../../src/models.ts";
+import { MODEL_PRESETS, ENDPOINTS, listOllamaModels, normalizeOllamaBaseUrl, DEFAULT_OLLAMA_BASE_URL, modelSupportsVision, modelLikelyWeakForBrowser } from "../../../src/models.ts";
 import { getSetting, setSetting } from "../../../src/server/store.ts";
 
 export const runtime = "nodejs";
@@ -31,6 +31,8 @@ export async function GET() {
     modelCanSee: modelSupportsVision(current),
     // Trusted browser input (CDP) — reliable clicks/keys on hard sites, at the cost of a debugging banner.
     browserTrusted: getSetting("browserTrusted", "on") !== "off",
+    // Soft hint: this model is likely too weak (free tier / small) to reliably run browser tasks.
+    browserWeak: modelLikelyWeakForBrowser(current, getSetting("endpoint", "openrouter")),
   });
 }
 
@@ -73,5 +75,6 @@ export async function POST(req: NextRequest) {
     vision: getSetting("vision", "on") !== "off",
     modelCanSee: modelSupportsVision(current),
     browserTrusted: getSetting("browserTrusted", "on") !== "off",
+    browserWeak: modelLikelyWeakForBrowser(current, getSetting("endpoint", "openrouter")),
   });
 }

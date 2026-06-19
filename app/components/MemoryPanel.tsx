@@ -24,6 +24,7 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
   const [endpoints, setEndpoints] = useState<{ key: string; label: string; note: string }[]>([]);
   const [vision, setVision] = useState(true);
   const [modelCanSee, setModelCanSee] = useState(false);
+  const [browserWeak, setBrowserWeak] = useState(false);
   const [browserTrusted, setBrowserTrusted] = useState(true);
   // OpenRouter API key (desktop app only — safeStorage lives in the Electron main process).
   const [keyConfigured, setKeyConfigured] = useState<boolean | null>(null);
@@ -93,6 +94,7 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
         setOllamaModels(d.ollamaModels ?? []);
         setVision(d.vision !== false);
         setModelCanSee(!!d.modelCanSee);
+        setBrowserWeak(!!d.browserWeak);
         setBrowserTrusted(d.browserTrusted !== false);
       })
       .catch(() => {});
@@ -198,6 +200,16 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
   // Switch where the agent runs (cloud OpenRouter or local Ollama). Keep the model compatible:
   // OpenRouter ids contain a "/", Ollama tags (e.g. "llama3.2:3b") don't. When moving to Ollama,
   // prefer a model actually detected on the configured server (a remote box may not have llama3.2:3b).
+  // Apply a /api/model POST echo so the model-dependent hints (can-see, weak-for-browser) refresh
+  // immediately on a model/endpoint switch instead of going stale until the panel is reopened.
+  const applyModelResp = (d: { current?: string; endpoint?: string; modelCanSee?: boolean; browserWeak?: boolean } | null) => {
+    if (!d) return;
+    if (typeof d.current === "string") setModel(d.current);
+    if (typeof d.endpoint === "string") setEndpoint(d.endpoint);
+    setModelCanSee(!!d.modelCanSee);
+    setBrowserWeak(!!d.browserWeak);
+  };
+
   const chooseEndpoint = async (key: string) => {
     setEndpoint(key);
     const body: { endpoint: string; model?: string } = { endpoint: key };
@@ -207,11 +219,12 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
       setModel(body.model);
       setCustomModel(body.model);
     }
-    await fetch("/api/model", {
+    const res = await fetch("/api/model", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-    }).catch(() => {});
+    }).catch(() => null);
+    applyModelResp(res ? await res.json().catch(() => null) : null);
   };
 
   // Switch the model new tasks use (persisted; takes effect next task).
@@ -220,11 +233,12 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
     if (!v) return;
     setModel(v);
     setSavingModel(true);
-    await fetch("/api/model", {
+    const res = await fetch("/api/model", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model: v }),
-    }).catch(() => {});
+    }).catch(() => null);
+    applyModelResp(res ? await res.json().catch(() => null) : null);
     setSavingModel(false);
   };
   useEffect(() => {
@@ -499,6 +513,12 @@ export function MemoryPanel({ open, onClose }: { open: boolean; onClose: () => v
                 <p className="text-xs text-stone-400">
                   Now using <span className="font-mono text-[11px] text-stone-600">{model || "…"}</span>
                 </p>
+                {browserWeak && caps.some((c) => c.id === "browser" && c.enabled) && (
+                  <p className="text-xs text-amber-600">
+                    This model often struggles with browser tasks — free and small models tend to loop or mis-click.
+                    For reliable web tasks, pick a stronger model above (e.g. Gemini 2.5 Flash or GPT-4.1 mini).
+                  </p>
+                )}
               </div>
 
               {/* "Eyes" — feed page screenshots to the model on web tasks (needs a vision model) */}

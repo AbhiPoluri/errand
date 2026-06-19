@@ -33,6 +33,7 @@
     "skill:test": "tsx src/skillTest.ts",
     "migrate:test": "tsx src/migrateTest.ts",
     "seq:test": "tsx src/seqTest.ts",
+    "models:test": "tsx src/modelsTest.ts",
     "paths:test": "tsx src/pathsTest.ts",
     "folders:test": "tsx src/foldersTest.ts",
     "resume:test": "tsx src/resumeTest.ts",
