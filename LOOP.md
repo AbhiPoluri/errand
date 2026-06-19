@@ -73,15 +73,6 @@ it under needs-attended/needs-user instead of the safe Backlog.
 _(Queued by the 2026-06-19 Discovery #2 pass — 4 parallel scouts (deep), each candidate triaged. Work
 top-down; re-run Discovery when this empties again.)_
 
-- [ ] **(high) Fix the length/content_filter tool_call strand** (`src/loop.ts:315,324-336`): when the
-  model is cut off (`finish_reason:"length"`) or filtered (`"content_filter"`) WHILE emitting tool_calls,
-  the assistant message is pushed WITH tool_calls but those two early returns emit run.error and return
-  WITHOUT appending any tool result — stranding a tool_calls message with no matching tool result in the
-  live session. Every follow-up turn (live or rehydrated) then 400s, wedging the conversation. The
-  cancel path is already protected (+ tested in v2test B); these are its unprotected siblings. Fix:
-  before each early return, if toolCalls.length, append a synthetic interrupted/refusal tool result per
-  call (mirror the finally backfill at loop.ts:536-543). Verify: loop:test cases scripting
-  finishResp("length"/"content_filter") WITH a tool_calls array, asserting wellFormed(session.messages).
 - [ ] **(high) Cover journalRestore copy + make_folder inverses** (`src/server/journalRestore.ts:36,41`):
   the restart-Undo fallback; restart:test only end-to-end-undoes move/write/delete/rename, never a
   reconstructed `copy` or `make_folder` inverse — so the make_folder "only remove if still EMPTY (never
@@ -131,6 +122,12 @@ top-down; re-run Discovery when this empties again.)_
 
 ## Done log (newest first)
 
+- 2026-06-19 — Fix the length/content_filter tool_call strand (from Discovery #2). A model cut off
+  (finish_reason "length") or filtered ("content_filter") WHILE emitting tool_calls left an assistant
+  tool_calls message with no matching tool result → every follow-up turn 400'd, wedging the conversation.
+  Added backfillStrandedCalls() before both early returns (mirrors the finally backfill). looptest +2
+  (4b/5b) — VERIFIED they fail without the fix (via a temp toggle) and pass with it. tsc clean; 26 offline
+  suites green. `84e37da`.
 - 2026-06-19 — **Discovery #2** (deep pass) + clickrisk money-movement fix. 4 parallel scouts went deep
   (loop/session internals, parsing/tools, server internals, untested-module coverage); triaged → queued
   8 tasks (3 high incl. a real run-wedge bug + 2 safety-contract coverage gaps, 4 med, 1 low). Worked the
