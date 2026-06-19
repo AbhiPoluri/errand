@@ -30,6 +30,7 @@
     "zip:test": "tsx src/zipTest.ts",
     "docwrite:test": "tsx src/docWriteTest.ts",
     "mcp:test": "tsx src/mcpTest.ts",
+    "mcpconfig:test": "tsx src/mcpConfigTest.ts",
     "skill:test": "tsx src/skillTest.ts",
     "migrate:test": "tsx src/migrateTest.ts",
     "seq:test": "tsx src/seqTest.ts",

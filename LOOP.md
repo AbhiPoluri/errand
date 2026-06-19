@@ -205,6 +205,13 @@ triaged. Work top-down; re-run Discovery when this empties again.)_
 
 ## Cron heartbeat (what drives this loop)
 
+**Drive model (2026-06-19): continuous self-paced — cron is only a FAILSAFE.** The loop runs
+iterations back-to-back without waiting for the heartbeat: after each one it re-arms a short
+`ScheduleWakeup` (~60s) to immediately continue. The cron below is the safety net — if the self-driven
+chain ever breaks (a missed wakeup, the turn ends, the session restarts) the 10-min cron picks the loop
+back up. Both inject the same HEARTBEAT prompt; the "finish mid-flight / clean tree / one task" guardrails
+make an occasional double-fire harmless (the later one just finds a clean tree and takes the next task).
+
 A **session-only** cron (`CronCreate`, `durable:false`) fires the HEARTBEAT prompt every 10 min while
 the REPL is idle. As of 2026-06-19 the live job is `16adc4c3` (`7,17,...,57 * * * *`); it replaced
 `4461c404` (reprompted when Discovery was added) and the original `ef511639` (gone zombie — listed but
