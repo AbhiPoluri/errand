@@ -75,9 +75,7 @@ top-down; re-run Discovery when this empties again.)_
 
 _(Queued by the 2026-06-19 Discovery #3 pass — 3 focused scouts (third sweep, high bar). Work top-down.)_
 
-- [ ] **(med) Fix HANDOFF offline-suite count again** (`HANDOFF.md:24,95`): says 26, but `session:test`
-  landed after → 27. Update the count + add `session` to the list. Docs-only. (Skip the stale cron-id in
-  HANDOFF — session-volatile by design; LOOP is authoritative.)
+_(empty — Discovery #3's batch (5 tasks) is cleared. The next iteration runs the Discovery pass.)_
 
 ## Blocked — needs the user / attended (DO NOT attempt unattended in the loop)
 
@@ -100,6 +98,9 @@ _(Queued by the 2026-06-19 Discovery #3 pass — 3 focused scouts (third sweep, 
 
 ## Done log (newest first)
 
+- 2026-06-19 — Fix HANDOFF offline-suite count 26→27 + add session (from Discovery #3, last of the batch).
+  Verified the list now exactly equals package.json *:test minus mem/doc/ocr. Docs-only. `40a0adc`.
+  **Discovery #3 batch (5 tasks) fully cleared.**
 - 2026-06-19 — Cover store journal-op null/corrupt manifest + getEvents skip-corrupt (from Discovery #3,
   two tasks in one). storetest now locks: null manifest round-trips, a corrupt manifest blob degrades to
   null (safeParse, no throw, other fields intact), and getEvents skips an unparseable event row (the
