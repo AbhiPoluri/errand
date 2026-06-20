@@ -75,14 +75,6 @@ top-down; re-run Discovery when this empties again.)_
 
 _(Queued by the 2026-06-19 Discovery #3 pass — 3 focused scouts (third sweep, high bar). Work top-down.)_
 
-- [ ] **(high) Fix the browser-approval claim in the system prompt** (`src/prompt.ts:8`): it says
-  "clicking and typing will ask the user first," but the real gate (`loop.ts:431` — `gated ||
-  reversibility !== "reversible"`) means typing is ALWAYS autonomous (`browser.ts:210` reversible) and
-  benign clicks run too (only RISKY-labelled / unlabelled clicks pause). The prompt mis-states the
-  trust-critical autonomy surface. Rewrite the line to match: reading/opening/typing + ordinary clicks
-  run on their own; a consequential click (send/buy/submit/delete, unlabelled, Enter) pauses for
-  approval. Keep the two phrases webtest.ts asserts on untouched. Verify: tsc + web:test (prompt
-  assertions still pass) + confirm against loop.ts/clickrisk.ts/browser.ts.
 - [ ] **(med) Cover save_skill cross-slug collision** (`src/tools/skills.ts:84-87`, `server/skills.ts:88`):
   `slugForName` collapses distinct names to one folder ("Tidy Downloads"/"tidy_downloads" → tidy-downloads;
   symbol/emoji-only → "skill"); the only non-clobber guard is `existsSync(slug)`, but skillTest only
@@ -122,6 +114,10 @@ _(Queued by the 2026-06-19 Discovery #3 pass — 3 focused scouts (third sweep, 
 
 ## Done log (newest first)
 
+- 2026-06-19 — Correct the browser-approval claim in the system prompt (from Discovery #3). The prompt
+  said "clicking and typing will ask the user first," but typing + benign clicks run autonomously
+  (reversible); only a consequential click (reversibility "unknown") or Enter pauses. Rewrote the line to
+  match the real gate; webtest guards the false claim from returning. tsc clean; 27 suites green. `41cf128`.
 - 2026-06-19 — **Discovery #3** (third sweep) + close a symlinked-parent SANDBOX ESCAPE. 3 focused scouts
   (high bar) queued 5 real tasks. Worked the security bug this iteration: write_file/make_folder/move_file/
   copy_file applied the realpath guard only to existing files / sources, so a symlinked parent dir
