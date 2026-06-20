@@ -75,14 +75,6 @@ top-down; re-run Discovery when this empties again.)_
 
 _(Queued by the 2026-06-19 Discovery #3 pass — 3 focused scouts (third sweep, high bar). Work top-down.)_
 
-- [ ] **(med) Cover store journal-op null + corrupt-manifest round-trip** (`src/server/store.ts:283,294`):
-  appendJournalOp with manifest:null → SQL NULL → getJournalOps returns manifest:null; and a corrupt
-  manifest blob (raw-SQL inject `'{not json'`) → getJournalOps returns manifest:null without throwing
-  (graceful degrade). Mirror storetest's existing raw-SQL corruption pattern. Additive.
-- [ ] **(med) Cover getEvents skip-unparseable-row** (`src/server/store.ts:251-259`): reconcileOrphans'
-  MAX(seq) correctness depends on getEvents dropping corrupt rows, but no test injects a corrupt event
-  payload. Add: 3 valid events, raw-SQL corrupt the middle one, assert getEvents returns the 2 good ones
-  and doesn't throw. Additive.
 - [ ] **(med) Fix HANDOFF offline-suite count again** (`HANDOFF.md:24,95`): says 26, but `session:test`
   landed after → 27. Update the count + add `session` to the list. Docs-only. (Skip the stale cron-id in
   HANDOFF — session-volatile by design; LOOP is authoritative.)
@@ -108,6 +100,10 @@ _(Queued by the 2026-06-19 Discovery #3 pass — 3 focused scouts (third sweep, 
 
 ## Done log (newest first)
 
+- 2026-06-19 — Cover store journal-op null/corrupt manifest + getEvents skip-corrupt (from Discovery #3,
+  two tasks in one). storetest now locks: null manifest round-trips, a corrupt manifest blob degrades to
+  null (safeParse, no throw, other fields intact), and getEvents skips an unparseable event row (the
+  behavior reconcileOrphans' MAX(seq) relies on). tsc clean; 27 suites green. `c3abe11`.
 - 2026-06-19 — Cover save_skill cross-slug collision (from Discovery #3). Locked the non-clobber guard for
   two DIFFERENT names that slug to the same folder (refused/exists, original frontmatter intact) + the
   symbol/emoji-only → "skill" slug case. skillTest +6. tsc clean; 27 suites green. `675e738`.
