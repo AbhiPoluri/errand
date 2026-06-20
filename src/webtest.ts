@@ -86,6 +86,11 @@ check("system prompt asks the model to name which site a web answer came from", 
 check("prompt forbids answering from memory when a page won't open", /don't answer the question from your own memory/.test(SYSTEM_PROMPT));
 check("web_fetch description warns against guessing on failure", /don't fall back to answering from your own memory/.test(webFetch.modelDescription));
 
+// The browser-approval line must match the real gate (loop: gated || reversibility !== "reversible";
+// browser_type + benign clicks are reversible → autonomous). It must NOT claim typing asks first.
+check("prompt no longer claims typing asks for permission (it runs autonomously)", !/clicking and typing will ask/i.test(SYSTEM_PROMPT));
+check("prompt says ordinary web actions run on their own", /run on their own/i.test(SYSTEM_PROMPT));
+
 console.log("\n== web_search run() distinguishes a blocked request from no results ==");
 const realFetch = globalThis.fetch;
 try {
