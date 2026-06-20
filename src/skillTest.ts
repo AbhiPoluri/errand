@@ -79,6 +79,21 @@ async function main() {
   await j.undoAll();
   check("undo removed the saved skill", !getSkill("Weekly Report"));
 
+  // --- cross-slug collision: two DIFFERENT display names that slug to the SAME folder must not clobber.
+  //     The only guard is existsSync(slug); skillTest previously only re-saved the SAME name. ---
+  const first = await saveSkillTool.run({ name: "Cross Slug", description: "the original", body: "step A" }, { ...ctx, journal: new Journal() });
+  check("first cross-slug save ok", first.ok, first.ok ? "" : (first as any).summary);
+  check("the two distinct names slug identically", slugForName("Cross Slug") === slugForName("cross_slug"));
+  const impostor = await saveSkillTool.run({ name: "cross_slug", description: "the impostor", body: "step B" }, { ...ctx, journal: new Journal() });
+  check("a DIFFERENT name with the same slug is refused (no clobber)", !impostor.ok && (impostor as any).error === "exists", JSON.stringify(impostor));
+  check("the original skill's frontmatter is intact (not overwritten)", getSkill("Cross Slug")?.description === "the original");
+  // Symbol/emoji-only names all collapse to the "skill" slug — same non-clobber must hold.
+  check("symbol-only + emoji-only names share the 'skill' slug", slugForName("!!!") === "skill" && slugForName("™") === "skill");
+  const sym1 = await saveSkillTool.run({ name: "!!!", body: "x" }, { ...ctx, journal: new Journal() });
+  check("a symbol-only name saves (slug 'skill')", sym1.ok, sym1.ok ? "" : (sym1 as any).summary);
+  const sym2 = await saveSkillTool.run({ name: "™", body: "y" }, { ...ctx, journal: new Journal() });
+  check("a second symbol/emoji-only name (same 'skill' slug) is refused", !sym2.ok && (sym2 as any).error === "exists");
+
   // --- review fix #8: a CRLF (Windows) SKILL.md still parses its frontmatter ---
   writeSkill("crlf", "---\r\nname: CRLF Skill\r\ndescription: from windows\r\n---\r\n\r\nstep one\r\nstep two");
   const crlf = getSkill("CRLF Skill");
