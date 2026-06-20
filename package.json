@@ -38,6 +38,7 @@
     "userun:test": "tsx src/useRunTest.ts",
     "runroute:test": "tsx src/runRouteTest.ts",
     "session:test": "tsx src/sessionTest.ts",
+    "log:test": "tsx src/logTest.ts",
     "paths:test": "tsx src/pathsTest.ts",
     "folders:test": "tsx src/foldersTest.ts",
     "resume:test": "tsx src/resumeTest.ts",
