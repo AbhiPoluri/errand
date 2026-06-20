@@ -6,9 +6,8 @@ import { join, dirname } from "node:path";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { z } from "zod";
 import type { Tool, ToolResult } from "./index.ts";
-import { resolveWithin, assertRealWithin, exists, name, MAX_FILE_BYTES, PathError } from "./fileutil.ts";
+import { resolveWithin, assertRealWithin, exists, name, MAX_FILE_BYTES, PathError, deepestExisting } from "./fileutil.ts";
 import { buildDocx, buildXlsx } from "./extract.ts";
-import { deepestExisting } from "./zip.ts";
 
 // xlsx content: rows per line, cells split on TAB if present (preferred — handles commas in data),
 // else on comma. Trailing blank line dropped so a text block doesn't leave an empty final row.

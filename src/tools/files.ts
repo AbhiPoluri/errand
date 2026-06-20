@@ -23,6 +23,7 @@ import type { Tool, ToolResult } from "./index.ts";
 import {
   resolveWithin,
   assertRealWithin,
+  deepestExisting,
   isBinary,
   exists,
   name,
@@ -187,7 +188,10 @@ export const writeFile: Tool<{ path: string; content: string }, { path: string }
     try {
       const abs = resolveWithin(ctx.roots, a.path);
       const existedBefore = exists(abs);
-      if (existedBefore) assertRealWithin(ctx.roots, abs);
+      // Confirm the REAL path is in-scope: the existing file, or (for a NEW file) its deepest existing
+      // ancestor — so a symlinked parent dir can't redirect the write outside the sandbox. resolveWithin
+      // is purely lexical and can't see through a symlink, the same gap zip/document guard against.
+      assertRealWithin(ctx.roots, existedBefore ? abs : deepestExisting(abs));
       const prior = existedBefore ? readFileSync(abs) : null;
       // Snapshot prior bytes to disk so this write is undoable even AFTER a restart (when the
       // in-memory `prior` buffer is gone). Best-effort: if snapshotting fails, snapshot stays
@@ -246,6 +250,7 @@ export const makeFolder: Tool<{ path: string }, { path: string }> = {
   run: async (a, ctx) => {
     try {
       const abs = resolveWithin(ctx.roots, a.path);
+      assertRealWithin(ctx.roots, deepestExisting(abs)); // a symlinked parent dir can't escape the sandbox
       if (exists(abs)) return { ok: false, error: "exists", summary: "That folder is already there." };
       mkdirSync(abs, { recursive: true });
       ctx.journal.record({
@@ -296,6 +301,7 @@ export const moveFile: Tool<{ from: string; to: string }, { from: string; to: st
       const from = resolveWithin(ctx.roots, a.from);
       const to = resolveWithin(ctx.roots, a.to);
       assertRealWithin(ctx.roots, from);
+      assertRealWithin(ctx.roots, deepestExisting(to)); // dest's real parent must be in-scope (no symlink escape)
       if (!exists(from)) return { ok: false, error: "missing", summary: "I couldn't find that file to move." };
       if (exists(to)) return { ok: false, error: "collision", summary: "Something's already there, so I left it alone." };
       mkdirSync(dirname(to), { recursive: true });
@@ -341,6 +347,7 @@ export const copyFile: Tool<{ from: string; to: string }, { from: string; to: st
       const from = resolveWithin(ctx.roots, a.from);
       const to = resolveWithin(ctx.roots, a.to);
       assertRealWithin(ctx.roots, from);
+      assertRealWithin(ctx.roots, deepestExisting(to)); // dest's real parent must be in-scope (no symlink escape)
       if (!exists(from)) return { ok: false, error: "missing", summary: "I couldn't find that file to copy." };
       if (exists(to)) return { ok: false, error: "collision", summary: "Something's already there, so I left it alone." };
       mkdirSync(dirname(to), { recursive: true });

@@ -1,6 +1,6 @@
 // Shared safety helpers for file tools: confine every path to an allowed root
 // (no ../ traversal, no symlink escape), detect binaries, and cap read size.
-import { resolve, relative, isAbsolute, sep, basename } from "node:path";
+import { resolve, relative, isAbsolute, sep, basename, dirname } from "node:path";
 import { realpathSync, statSync } from "node:fs";
 
 export const MAX_READ_BYTES = 200_000;
@@ -66,6 +66,20 @@ export function exists(p: string): boolean {
   } catch {
     return false;
   }
+}
+
+// The deepest ancestor of `p` that actually exists on disk — the furthest point realpathSync can
+// resolve. Used to scope-check a not-yet-created destination: assertRealWithin no-ops on a missing
+// path, so callers pass deepestExisting(target) to catch a symlinked PARENT dir that escapes the
+// sandbox (a `safe/link -> /outside` then writing `safe/link/x`).
+export function deepestExisting(p: string): string {
+  let cur = p;
+  while (!exists(cur)) {
+    const parent = dirname(cur);
+    if (parent === cur) return cur; // reached the filesystem root
+    cur = parent;
+  }
+  return cur;
 }
 
 export const name = (p: string) => basename(p);

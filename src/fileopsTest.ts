@@ -11,13 +11,14 @@ import {
   rmSync,
   readdirSync,
   utimesSync,
+  symlinkSync,
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import { checkRoots, availableFolders } from "./server/folders.ts";
 import { Journal } from "./journal.ts";
 import { Registry, type ToolContext } from "./tools/index.ts";
-import { fileTools, renameFile, moveFile, folderSummary, findDuplicates, recentChanges, findFiles, deleteFile } from "./tools/files.ts";
+import { fileTools, writeFile, makeFolder, renameFile, moveFile, copyFile, folderSummary, findDuplicates, recentChanges, findFiles, deleteFile } from "./tools/files.ts";
 import { extractZip } from "./tools/zip.ts";
 
 // Build a minimal STORED (method 0) zip by hand — enough for extract_zip's reader (it ignores CRC).
@@ -332,6 +333,29 @@ function testFolderAllowlist() {
   check("a mix with one bad root is REJECTED", offered ? checkRoots([offered, "/tmp"]).ok === false : true);
 }
 
+async function testSymlinkEscape() {
+  console.log("\n== mutation tools refuse a symlinked-parent escape (the sandbox guarantee) ==");
+  const root = tmp("errand-symesc-");
+  const outside = tmp("errand-symesc-out-");
+  symlinkSync(outside, join(root, "link"), "dir"); // root/link -> outside: lexically in-scope, really not
+  writeFileSync(join(root, "src.txt"), "DATA"); // an in-scope source for move/copy
+  const ctx = () => ctxFor(root, new Journal());
+
+  const w = await writeFile.run({ path: join(root, "link", "pwned.txt"), content: "ESCAPED" }, ctx());
+  check("write_file refuses a symlinked-parent destination", !w.ok, JSON.stringify(w));
+  const mf = await makeFolder.run({ path: join(root, "link", "pwned-dir") }, ctx());
+  check("make_folder refuses a symlinked-parent destination", !mf.ok, JSON.stringify(mf));
+  const mv = await moveFile.run({ from: join(root, "src.txt"), to: join(root, "link", "moved.txt") }, ctx());
+  check("move_file refuses a symlinked-parent destination", !mv.ok, JSON.stringify(mv));
+  const cp = await copyFile.run({ from: join(root, "src.txt"), to: join(root, "link", "copied.txt") }, ctx());
+  check("copy_file refuses a symlinked-parent destination", !cp.ok, JSON.stringify(cp));
+
+  check("NOTHING was written outside the sandbox via the symlink", readdirSync(outside).length === 0, readdirSync(outside).join(","));
+  check("the in-scope source file is untouched", existsSync(join(root, "src.txt")));
+  rmSync(root, { recursive: true, force: true });
+  rmSync(outside, { recursive: true, force: true });
+}
+
 function testRegistryHygiene() {
   console.log("\n== registry hygiene ==");
   const reg = new Registry();
@@ -353,6 +377,7 @@ async function main() {
   await testRecentChanges();
   await testExtractZip();
   await testFindFiles();
+  await testSymlinkEscape();
   testFolderAllowlist();
   testRegistryHygiene();
   console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILED"}`);

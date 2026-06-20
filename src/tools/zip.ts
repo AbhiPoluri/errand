@@ -8,7 +8,7 @@ import { mkdirSync, writeFileSync, readFileSync, rmSync, statSync } from "node:f
 import { join, dirname } from "node:path";
 import { z } from "zod";
 import type { Tool, ToolResult } from "./index.ts";
-import { resolveWithin, assertRealWithin, exists, name, MAX_FILE_BYTES, PathError } from "./fileutil.ts";
+import { resolveWithin, assertRealWithin, exists, name, MAX_FILE_BYTES, PathError, deepestExisting } from "./fileutil.ts";
 import { listZipEntries, inflateZipEntry, buildZip } from "./extract.ts";
 
 const MAX_ENTRIES = 5_000; // refuse pathological archives with a huge file count
@@ -92,19 +92,6 @@ export const extractZip: Tool<{ path: string }, { dest: string; files: number }>
     }
   },
 };
-
-// The deepest ancestor of `p` that actually exists on disk — the furthest point realpathSync can
-// resolve. Used to scope-check a not-yet-created output: assertRealWithin no-ops on a missing path,
-// so we hand it this instead to catch a symlinked parent dir that escapes the sandbox.
-export function deepestExisting(p: string): string {
-  let cur = p;
-  while (!exists(cur)) {
-    const parent = dirname(cur);
-    if (parent === cur) return cur; // reached the filesystem root
-    cur = parent;
-  }
-  return cur;
-}
 
 // Give an entry a collision-free name within the archive: "notes.txt", then "notes (2).txt", …,
 // so two source files that share a basename don't overwrite each other inside the zip.
