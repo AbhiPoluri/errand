@@ -73,8 +73,33 @@ it under needs-attended/needs-user instead of the safe Backlog.
 _(Queued by the 2026-06-19 Discovery #2 pass — 4 parallel scouts (deep), each candidate triaged. Work
 top-down; re-run Discovery when this empties again.)_
 
-_(empty — Discovery #2's full batch (8 tasks) is cleared. The next iteration runs the Discovery pass to
-find + queue the next batch.)_
+_(Queued by the 2026-06-19 Discovery #3 pass — 3 focused scouts (third sweep, high bar). Work top-down.)_
+
+- [ ] **(high) Fix the browser-approval claim in the system prompt** (`src/prompt.ts:8`): it says
+  "clicking and typing will ask the user first," but the real gate (`loop.ts:431` — `gated ||
+  reversibility !== "reversible"`) means typing is ALWAYS autonomous (`browser.ts:210` reversible) and
+  benign clicks run too (only RISKY-labelled / unlabelled clicks pause). The prompt mis-states the
+  trust-critical autonomy surface. Rewrite the line to match: reading/opening/typing + ordinary clicks
+  run on their own; a consequential click (send/buy/submit/delete, unlabelled, Enter) pauses for
+  approval. Keep the two phrases webtest.ts asserts on untouched. Verify: tsc + web:test (prompt
+  assertions still pass) + confirm against loop.ts/clickrisk.ts/browser.ts.
+- [ ] **(med) Cover save_skill cross-slug collision** (`src/tools/skills.ts:84-87`, `server/skills.ts:88`):
+  `slugForName` collapses distinct names to one folder ("Tidy Downloads"/"tidy_downloads" → tidy-downloads;
+  symbol/emoji-only → "skill"); the only non-clobber guard is `existsSync(slug)`, but skillTest only
+  re-saves the SAME name. Add: save name A, then a DIFFERENT name slugging identically → 2nd returns
+  ok:false/exists, the on-disk SKILL.md still has A's frontmatter (no clobber), getSkill resolves A.
+  Additive. Verify: skill:test + tsc.
+- [ ] **(med) Cover store journal-op null + corrupt-manifest round-trip** (`src/server/store.ts:283,294`):
+  appendJournalOp with manifest:null → SQL NULL → getJournalOps returns manifest:null; and a corrupt
+  manifest blob (raw-SQL inject `'{not json'`) → getJournalOps returns manifest:null without throwing
+  (graceful degrade). Mirror storetest's existing raw-SQL corruption pattern. Additive.
+- [ ] **(med) Cover getEvents skip-unparseable-row** (`src/server/store.ts:251-259`): reconcileOrphans'
+  MAX(seq) correctness depends on getEvents dropping corrupt rows, but no test injects a corrupt event
+  payload. Add: 3 valid events, raw-SQL corrupt the middle one, assert getEvents returns the 2 good ones
+  and doesn't throw. Additive.
+- [ ] **(med) Fix HANDOFF offline-suite count again** (`HANDOFF.md:24,95`): says 26, but `session:test`
+  landed after → 27. Update the count + add `session` to the list. Docs-only. (Skip the stale cron-id in
+  HANDOFF — session-volatile by design; LOOP is authoritative.)
 
 ## Blocked — needs the user / attended (DO NOT attempt unattended in the loop)
 
@@ -97,6 +122,13 @@ find + queue the next batch.)_
 
 ## Done log (newest first)
 
+- 2026-06-19 — **Discovery #3** (third sweep) + close a symlinked-parent SANDBOX ESCAPE. 3 focused scouts
+  (high bar) queued 5 real tasks. Worked the security bug this iteration: write_file/make_folder/move_file/
+  copy_file applied the realpath guard only to existing files / sources, so a symlinked parent dir
+  (safe/link→/outside) let a NEW destination write OUTSIDE the sandbox. Extended the deepestExisting +
+  assertRealWithin guard (already used by zip/document) to all four; moved deepestExisting into fileutil.ts.
+  fileopsTest symlink-escape case VERIFIED to bite (without the guard, write_file writes pwned.txt outside,
+  ok:true). tsc clean; 27 offline suites green. `ec30807`.
 - 2026-06-19 — Lock extract_zip over-cap atomic rollback (from Discovery #2, last of the batch). A 5001-
   entry stored-zip case asserts an over-MAX_ENTRIES archive → ok:false/unpack_failed AND no half-written
   dest folder (atomic rollback). No production change (real over-cap zip, ~1s). tsc clean; 27 suites
