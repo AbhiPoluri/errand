@@ -100,12 +100,46 @@ function testRecentConversationsSkipsMalformed() {
   check("the malformed run contributed nothing", !convos.includes("{not valid json"));
 }
 
+function testJournalOpManifest() {
+  console.log("\n== journal op: null manifest round-trips + a corrupt blob degrades to null (no throw) ==");
+  store.createRun("jrun", "Journal run", 1, ["/tmp"]);
+  store.appendJournalOp("jrun", { opId: "op-null", op: "run_command", description: "no manifest", reversibility: "unknown", manifest: null });
+  store.appendJournalOp("jrun", { opId: "op-ok", op: "move", description: "a move", reversibility: "reversible", manifest: { kind: "move", from: "/a", to: "/b" } as any });
+  // Corrupt the second op's manifest blob directly (appendJournalOp always stringifies valid JSON).
+  const raw = new DatabaseSync(dbPath);
+  raw.prepare("UPDATE journal SET manifest = ? WHERE runId = ? AND opId = ?").run("{not json", "jrun", "op-ok");
+  raw.close();
+  const ops = store.getJournalOps("jrun");
+  check("both journal ops returned (no throw)", ops.length === 2, `${ops.length}`);
+  check("a null manifest round-trips as null", ops.find((o) => o.opId === "op-null")?.manifest === null);
+  const corrupt = ops.find((o) => o.opId === "op-ok");
+  check("a corrupt manifest blob degrades to null (safeParse, no throw)", !!corrupt && corrupt.manifest === null);
+  check("the corrupt op's other fields are intact", corrupt?.op === "move" && corrupt?.description === "a move");
+}
+
+function testGetEventsSkipsCorrupt() {
+  console.log("\n== getEvents skips an unparseable event row (reconcileOrphans relies on this) ==");
+  store.createRun("erun", "Event run", 1, ["/tmp"]);
+  store.appendEvent("erun", { runId: "erun", turnId: "t", seq: 0, ts: 1, type: "run.started", title: "x" } as any);
+  store.appendEvent("erun", { runId: "erun", turnId: "t", seq: 1, ts: 1, type: "user.message", text: "hi" } as any);
+  store.appendEvent("erun", { runId: "erun", turnId: "t", seq: 2, ts: 1, type: "run.finished", status: "completed" } as any);
+  // Corrupt the MIDDLE event's payload directly (appendEvent always stringifies a valid event).
+  const raw = new DatabaseSync(dbPath);
+  raw.prepare("UPDATE events SET payload = ? WHERE runId = ? AND seq = ?").run("{bad", "erun", 1);
+  raw.close();
+  const evs = store.getEvents("erun") as any[];
+  check("returns the 2 good events, skips the corrupt one (no throw)", evs.length === 2, `${evs.length}`);
+  check("the surviving events are the good ones (not the corrupt middle)", evs.some((e) => e.type === "run.started") && evs.some((e) => e.type === "run.finished"));
+}
+
 async function main() {
   await testMemories();
   await testSuggestions();
   testSettings();
   testDedupIndexes();
   testRecentConversationsSkipsMalformed();
+  testJournalOpManifest();
+  testGetEventsSkipsCorrupt();
   _setEmbedClient(null);
   console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILED"}`);
   process.exit(failures === 0 ? 0 : 1);
