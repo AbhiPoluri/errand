@@ -75,7 +75,21 @@ top-down; re-run Discovery when this empties again.)_
 
 _(Queued by the 2026-06-19 Discovery #3 pass — 3 focused scouts (third sweep, high bar). Work top-down.)_
 
-_(empty — Discovery #3's batch (5 tasks) is cleared. The next iteration runs the Discovery pass.)_
+_(Queued by the 2026-06-19 Discovery #4 pass — a HIGH-bar 4th sweep. The concurrency scout found NO bug
+(paths verified correct); the other found one real bug (log.ts, done below). Only these two marginal
+coverage tasks remain — Discovery is approaching exhaustion.)_
+
+- [ ] **(low-med) Cover the runRegistry turn-mutex + cancelledThrough** (`src/server/runRegistry.ts:
+  379-408`): the turn-serialization + post-Stop cancellation core (cancelledThrough was itself a bug
+  fix) has no direct test — restart/runroute tests hit store/routes, not the mutex. Lock: a queued turn
+  is skipped when `turnId <= cancelledThrough`; a post-Stop sendMessage still runs; removeRun skips a
+  queued turn. NOTE moderate effort: execTurn/runTurn are private and importing runRegistry runs
+  bootstrap(), so it needs the ERRAND_DB-temp + stubbed-AgentRunner harness restartTest uses (or a small
+  refactor extracting the skip predicate to a pure helper). Verify: new registry:test + tsc + full suite.
+- [ ] **(low-med) Cover listOllamaModels parsing** (`src/server/models.ts:84-103`): feeds the Settings
+  model picker; the embedding-name filter (drops embed models so the user can't pick a non-chat model),
+  string/empty filter, Set dedup, and fail-soft (non-array / non-ok / thrown → []) are untested. Add
+  fetch-stub cases (pattern from webtest/models:test). Additive. Verify: models:test (or new) + tsc.
 
 ## Blocked — needs the user / attended (DO NOT attempt unattended in the loop)
 
@@ -98,6 +112,13 @@ _(empty — Discovery #3's batch (5 tasks) is cleared. The next iteration runs t
 
 ## Done log (newest first)
 
+- 2026-06-19 — **Discovery #4** (high-bar 4th sweep) + fix a logging crash. The concurrency scout
+  found NO bug (turn-mutex/cancel/SSE/checkpoint paths verified correct — honest "nothing real"); the
+  other found one genuine bug, fixed this iteration: **log.ts ran JSON.stringify OUTSIDE its try**, so a
+  circular-ref / BigInt payload (raw SDK objects are logged) threw into the run despite the "never let
+  logging break a run" contract. Moved stringify inside the try + "[unserializable]" fallback. New
+  log:test. tsc clean; 28 offline suites green. `541c8a5`. Only 2 marginal coverage tasks queued —
+  Discovery is near exhaustion (3.5 sweeps, 23 real improvements).
 - 2026-06-19 — Fix HANDOFF offline-suite count 26→27 + add session (from Discovery #3, last of the batch).
   Verified the list now exactly equals package.json *:test minus mem/doc/ocr. Docs-only. `40a0adc`.
   **Discovery #3 batch (5 tasks) fully cleared.**
