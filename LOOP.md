@@ -75,12 +75,6 @@ top-down; re-run Discovery when this empties again.)_
 
 _(Queued by the 2026-06-19 Discovery #3 pass — 3 focused scouts (third sweep, high bar). Work top-down.)_
 
-- [ ] **(med) Cover save_skill cross-slug collision** (`src/tools/skills.ts:84-87`, `server/skills.ts:88`):
-  `slugForName` collapses distinct names to one folder ("Tidy Downloads"/"tidy_downloads" → tidy-downloads;
-  symbol/emoji-only → "skill"); the only non-clobber guard is `existsSync(slug)`, but skillTest only
-  re-saves the SAME name. Add: save name A, then a DIFFERENT name slugging identically → 2nd returns
-  ok:false/exists, the on-disk SKILL.md still has A's frontmatter (no clobber), getSkill resolves A.
-  Additive. Verify: skill:test + tsc.
 - [ ] **(med) Cover store journal-op null + corrupt-manifest round-trip** (`src/server/store.ts:283,294`):
   appendJournalOp with manifest:null → SQL NULL → getJournalOps returns manifest:null; and a corrupt
   manifest blob (raw-SQL inject `'{not json'`) → getJournalOps returns manifest:null without throwing
@@ -114,6 +108,9 @@ _(Queued by the 2026-06-19 Discovery #3 pass — 3 focused scouts (third sweep, 
 
 ## Done log (newest first)
 
+- 2026-06-19 — Cover save_skill cross-slug collision (from Discovery #3). Locked the non-clobber guard for
+  two DIFFERENT names that slug to the same folder (refused/exists, original frontmatter intact) + the
+  symbol/emoji-only → "skill" slug case. skillTest +6. tsc clean; 27 suites green. `675e738`.
 - 2026-06-19 — Correct the browser-approval claim in the system prompt (from Discovery #3). The prompt
   said "clicking and typing will ask the user first," but typing + benign clicks run autonomously
   (reversible); only a consequential click (reversibility "unknown") or Enter pauses. Rewrote the line to
