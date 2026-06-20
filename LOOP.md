@@ -73,9 +73,8 @@ it under needs-attended/needs-user instead of the safe Backlog.
 _(Queued by the 2026-06-19 Discovery #2 pass — 4 parallel scouts (deep), each candidate triaged. Work
 top-down; re-run Discovery when this empties again.)_
 
-- [ ] **(low) Lock the zip MAX_ENTRIES boundary** (`src/tools/zip.ts:58`): an over-cap archive aborts the
-  whole unpack + removes the dest (atomic, intentional) but is untested; the cap consts aren't exported,
-  so this needs a small `export` to test cleanly. Lock current behavior in fileops:test. Lowest priority.
+_(empty — Discovery #2's full batch (8 tasks) is cleared. The next iteration runs the Discovery pass to
+find + queue the next batch.)_
 
 ## Blocked — needs the user / attended (DO NOT attempt unattended in the loop)
 
@@ -98,6 +97,10 @@ top-down; re-run Discovery when this empties again.)_
 
 ## Done log (newest first)
 
+- 2026-06-19 — Lock extract_zip over-cap atomic rollback (from Discovery #2, last of the batch). A 5001-
+  entry stored-zip case asserts an over-MAX_ENTRIES archive → ok:false/unpack_failed AND no half-written
+  dest folder (atomic rollback). No production change (real over-cap zip, ~1s). tsc clean; 27 suites
+  green. `bdfb2a0`. **Discovery #2 batch (8 tasks) fully cleared.**
 - 2026-06-19 — Cover embedMany malformed-index remap (from Discovery #2). embed:test now locks an
   out-of-range index (dropped by the slot guard, no throw/drift) and a missing index (positional `?? i`
   fallback) — the order-preserving contract memory retrieval rests on. Additive. tsc clean; 27 suites
