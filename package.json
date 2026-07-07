@@ -42,6 +42,8 @@
     "paths:test": "tsx src/pathsTest.ts",
     "folders:test": "tsx src/foldersTest.ts",
     "resume:test": "tsx src/resumeTest.ts",
+    "resumeconsumer:test": "tsx src/resumeConsumerTest.ts",
+    "chaos:test": "tsx src/chaosTest.ts",
     "cli": "tsx src/cli.ts",
     "web": "next dev -p 3200",
     "dev": "next dev -p 3200",

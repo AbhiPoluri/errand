@@ -340,6 +340,29 @@ function persistJournal(entry: RunEntry): void {
 // this run's in-memory trust flag (autoApproveReversible), which the loop doesn't know. Fully
 // swallowed — a checkpoint write failing must never affect the turn (the loop runs the same with or
 // without persistence; resume just won't be available for that run).
+// The loop's tool_inflight hooks: persist a marker while an irreversible tool runs, clear it after.
+// Fully swallowed — a marker write failing must never affect the turn (it just weakens the resume
+// double-execution guard for that one call). Skipped for a deleted run (no rows for a vanishing run).
+function inflightHooks(entry: RunEntry): { markInflight: (c: string, t: string, r: string) => void; clearInflight: (c: string) => void } {
+  return {
+    markInflight: (callId, toolName, reversibility) => {
+      if (entry.deleted) return;
+      try {
+        store.saveInflight(entry.runId, callId, toolName, reversibility);
+      } catch (e) {
+        console.warn(`[errand] failed to mark tool_inflight for run ${entry.runId} (continuing):`, e);
+      }
+    },
+    clearInflight: (callId) => {
+      try {
+        store.clearInflight(entry.runId, callId);
+      } catch (e) {
+        console.warn(`[errand] failed to clear tool_inflight for run ${entry.runId} (continuing):`, e);
+      }
+    },
+  };
+}
+
 function checkpointFor(entry: RunEntry): (s: TurnState) => void {
   return (s) => {
     if (entry.deleted) return; // removed mid-turn — don't re-create its turn_state row (mirrors attachPersistence)
@@ -369,6 +392,15 @@ function wireJournalPersistence(entry: RunEntry): void {
       });
     } catch (err) {
       console.warn(`[errand] failed to persist journal op for run ${entry.runId} (continuing):`, err);
+    }
+  };
+  // Persist the undone flag the instant a whole-run undo reverses an op, so the state survives
+  // eviction/restart (a rehydrated run then skips it instead of re-running the inverse).
+  entry.session.journal.onUndone = (e) => {
+    try {
+      store.markJournalOpUndone(entry.runId, e.id);
+    } catch (err) {
+      console.warn(`[errand] failed to persist undone flag for run ${entry.runId} (continuing):`, err);
     }
   };
 }
@@ -439,6 +471,7 @@ export async function startRun(message: string, roots?: string[]): Promise<strin
     runId,
     gate: new WebGate(entry),
     checkpoint: checkpointFor(entry),
+    ...inflightHooks(entry),
     roots: usedRoots,
   });
   store.createRun(runId, entry.title, entry.createdAt, usedRoots);
@@ -490,13 +523,70 @@ function rehydrate(runId: string): RunEntry | undefined {
     runId,
     gate: new WebGate(entry),
     checkpoint: checkpointFor(entry),
+    ...inflightHooks(entry),
     roots: stored.roots.length ? stored.roots : [config.workspaceRoot],
     startSeq: maxSeq + 1,
   });
   attachPersistence(entry);
   wireJournalPersistence(entry); // set AFTER rebuildJournalFromStore above, so the restore doesn't re-persist
   runs.set(runId, entry);
+  // If this run was interrupted mid-turn with a durable checkpoint (a crash/restart while it was
+  // 'working'), re-enter its loop from that checkpoint NOW — lazily, the moment it's accessed again
+  // (a reconnecting SSE stream, a /message, an undo). Resume re-parks any pending approval (re-emits
+  // approval.required + re-registers the gate promise so /decision resolves it) and continues the loop
+  // from the persisted boundary, without re-calling the model for the already-completed part of the turn.
+  maybeResume(entry);
   return entry;
+}
+
+// Kick off a mid-turn resume if this run has a durable checkpoint. Enqueued on the turnQueue exactly
+// like a normal turn (so it serializes with any follow-up /message). No-op unless the run is resumable.
+function maybeResume(entry: RunEntry): void {
+  let state: store.TurnStateRow | null = null;
+  try {
+    if (!store.isResumable(entry.runId)) return;
+    state = store.getTurnState(entry.runId);
+  } catch (e) {
+    console.warn(`[errand] resume check failed for run ${entry.runId} (continuing, not resuming):`, e);
+    return;
+  }
+  if (!state) return;
+  entry.autoApproveReversible = state.autoApproveReversible; // restore the run's in-flight trust flag
+  const turnId = ++entry.turnSeq;
+  entry.turnQueue = entry.turnQueue.then(() => execResume(entry, state!, turnId));
+}
+
+// Run a resumed turn to settle. Mirrors execTurn's abort/busy/finally lifecycle exactly (fresh
+// AbortController, post-turn persistence) — the only difference is runner.resume(state) instead of
+// runner.send(message): it re-enters the interrupted turn from its checkpoint rather than starting one.
+function execResume(entry: RunEntry, state: store.TurnStateRow, turnId: number): Promise<void> {
+  if (entry.deleted || turnId <= entry.cancelledThrough) return Promise.resolve();
+  entry.abort = new AbortController();
+  entry.busy = true;
+  // Any tool_inflight marker that survived the crash names an irreversible call that was mid-run — the
+  // loop marks those UNCERTAIN instead of re-running them (the double-execution guard).
+  let inflight = new Set<string>();
+  try {
+    inflight = store.getInflightIds(entry.runId);
+  } catch {
+    /* couldn't read the markers — resume without the guard (worst case a reversible re-run) */
+  }
+  return entry.runner
+    .resume(state, entry.abort.signal, inflight)
+    .catch(() => {})
+    .finally(() => {
+      entry.busy = false;
+      try {
+        store.setMessages(entry.runId, entry.session.messages); // durable conversation
+        store.clearTurnState(entry.runId); // turn settled — the durable record is now runs.messages
+        store.clearInflightForRun(entry.runId); // drop any leftover markers now the turn has settled
+        if (!entry.deleted) persistJournal(entry); // so Undo survives a restart / eviction
+        maybeDream();
+      } catch (err) {
+        console.warn(`[errand] post-resume persistence failed for run ${entry.runId} (continuing):`, err);
+      }
+    })
+    .then(() => {});
 }
 
 export function getRun(runId: string): RunEntry | undefined {
@@ -586,6 +676,15 @@ export async function undoRun(
   if (live) return live.session.journal.undoAll();
   if (!store.getStoredRun(runId)) return null;
   const journal = new Journal();
-  rebuildJournalFromStore(runId, journal);
+  // Persist each undone flag as this throwaway journal reverses it, so a SECOND undo of this same
+  // evicted run rebuilds with undone=true and does nothing (idempotent whole-run undo across restarts).
+  journal.onUndone = (e) => {
+    try {
+      store.markJournalOpUndone(runId, e.id);
+    } catch (err) {
+      console.warn(`[errand] failed to persist undone flag for run ${runId} (continuing):`, err);
+    }
+  };
+  rebuildJournalFromStore(runId, journal); // restores each op's persisted `undone` (already-undone → skipped)
   return journal.undoAll();
 }
