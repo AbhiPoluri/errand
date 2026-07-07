@@ -95,6 +95,10 @@ function apply(s: RunState, e: AgentEvent): RunState {
       return { ...updateLast(s, (t) => ({ ...t, reply: t.reply + e.text })), thinking: false };
     case "message.completed":
       return { ...updateLast(s, (t) => ({ ...t, reply: e.text })), thinking: false };
+    case "message.refusal":
+      // The model declined — render the decline as the reply and stop the Thinking pulse. The
+      // following run.finished carries the same text as finalMessage, so replay resolves identically.
+      return { ...updateLast(s, (t) => ({ ...t, reply: e.text })), thinking: false };
     case "tool.proposed": {
       const step: Step = { callId: e.callId, action: e.action, state: "running", reversibility: e.reversibility };
       return { ...updateLast(s, (t) => ({ ...t, steps: upsert(t.steps, step) })), thinking: false, statusLine: e.action };
@@ -208,24 +212,36 @@ export function useRun() {
     [openStream],
   );
 
+  // Guard against a double-submit racing past the button's disabled state (a fast double-click can
+  // fire two onClicks before React re-renders). At most ONE decision POST per approval callId.
+  const decidingRef = useRef<string | null>(null);
   const decide = useCallback(
     async (decision: "approved" | "denied" | "approved_always") => {
       const { runId, approval } = stateRef.current;
       if (!runId || !approval) return;
+      if (decidingRef.current === approval.callId) return; // already submitting this approval
+      decidingRef.current = approval.callId;
       if (decision === "approved_always") setState((s) => ({ ...s, autoApprove: true }));
       let ok = false;
+      let status = 0;
       try {
         const res = await fetch(`/api/runs/${runId}/decision`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ callId: approval.callId, decision }),
         });
+        status = res.status;
         const data = await res.json().catch(() => ({}));
         ok = res.ok && data?.ok !== false; // server resolved it → approval.resolved will clear the card
       } catch {
         ok = false;
       }
-      if (!ok) setState((s) => resolveApprovalFailure(s, approval.callId));
+      // A 404 means the approval was ALREADY resolved server-side — the run has moved on (a duplicate
+      // submit that lost the race, or the loop already proceeded). The real resolution rides the SSE
+      // stream (approval.resolved) and clears the card. Swallow it: do NOT flip to an error phase whose
+      // "Try again" would re-run work that was already approved and applied. Only a genuine transport
+      // failure (no response, 5xx) surfaces the calm snag.
+      if (!ok && status !== 404) setState((s) => resolveApprovalFailure(s, approval.callId));
     },
     [],
   );

@@ -181,6 +181,17 @@ export function RunView(props: {
     t.steps.some((st) => st.state === "failed" && /browser isn't connected/i.test(st.summary ?? "")),
   );
   const [followUp, setFollowUp] = useState("");
+  // The approval currently being submitted — disables both buttons the instant one is clicked so a
+  // double-click can't POST /decision twice (the second would 404 and, before the fix, flip a
+  // proceeding run to a false "expired" error). Keyed to the pending approval's callId, so a fresh
+  // approval (new callId) re-enables automatically; a resolved card just clears.
+  const [submittingId, setSubmittingId] = useState<string | null>(null);
+  const submitting = !!state.approval && submittingId === state.approval.callId;
+  const submitApproval = (fn: () => void) => {
+    if (!state.approval || submitting) return;
+    setSubmittingId(state.approval.callId);
+    fn();
+  };
   const [connecting, setConnecting] = useState(false);
   const [attached, setAttached] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -432,22 +443,25 @@ export function RunView(props: {
           {state.approval.consequences && <p className="mt-2 text-sm text-stone-500">{state.approval.consequences}</p>}
           <div className="mt-5 flex flex-wrap items-center gap-3">
             <button
-              onClick={props.onApprove}
-              className="rounded-xl bg-accent-600 px-5 py-3 text-sm font-medium text-white transition hover:bg-accent-700 active:scale-[0.98]"
+              onClick={() => submitApproval(props.onApprove)}
+              disabled={submitting}
+              className="rounded-xl bg-accent-600 px-5 py-3 text-sm font-medium text-white transition hover:bg-accent-700 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50"
             >
               Yes, go ahead
             </button>
             <button
-              onClick={props.onDeny}
-              className="rounded-xl border border-stone-300 bg-white px-5 py-3 text-sm font-medium text-stone-700 transition hover:border-stone-400 active:scale-[0.98]"
+              onClick={() => submitApproval(props.onDeny)}
+              disabled={submitting}
+              className="rounded-xl border border-stone-300 bg-white px-5 py-3 text-sm font-medium text-stone-700 transition hover:border-stone-400 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50"
             >
               Not yet
             </button>
             {/* Auto-approve is offered ONLY for reversible actions — never permanent/unknown. */}
             {state.approval.reversibility === "reversible" && (
               <button
-                onClick={props.onApproveAll}
-                className="rounded-xl px-3 py-3 text-sm font-medium text-stone-500 transition hover:text-stone-900 active:scale-[0.98]"
+                onClick={() => submitApproval(props.onApproveAll)}
+                disabled={submitting}
+                className="rounded-xl px-3 py-3 text-sm font-medium text-stone-500 transition hover:text-stone-900 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50"
               >
                 Yes to all in this errand
               </button>
