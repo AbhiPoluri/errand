@@ -29,6 +29,10 @@ export interface JournalEntry {
   // Present ONLY when truly undoable. Restores the prior state; must be idempotent-safe.
   // Undo eligibility is THIS, not the label — a 'reversible' label with no inverse is a lie.
   inverse?: () => Promise<void>;
+  // Set true once undoAll() has successfully run this entry's inverse. An undone entry is NOT
+  // reversible again (reversibleCount excludes it) and is skipped by a second undoAll — so a
+  // re-created file can never be re-deleted by a stale inverse from a prior completion's "Undo all".
+  undone?: boolean;
   // Serializable description of the op — persisted so the inverse can be RECONSTRUCTED after a
   // restart, when the live `inverse` closure is gone.
   manifest?: OpManifest;
@@ -71,25 +75,31 @@ export class Journal {
     return this.entries;
   }
 
-  // Only entries with a real inverse are undoable.
+  // Only entries with a real inverse that HAVEN'T already been undone are still undoable.
   reversibleCount(): number {
-    return this.entries.filter((e) => typeof e.inverse === "function").length;
+    return this.entries.filter((e) => typeof e.inverse === "function" && !e.undone).length;
   }
 
   // Undo in reverse order. Only reversible entries are touched; failures are counted,
-  // never thrown (a half-failed undo must still report honestly to the user).
+  // never thrown (a half-failed undo must still report honestly to the user). Already-undone
+  // entries are skipped silently (a true no-op) so a SECOND undoAll — or a next completion that
+  // still lists the same cumulative journal — can't re-run an inverse and, e.g., recursively
+  // delete a folder the user has since re-created. A successful inverse marks the entry undone; a
+  // FAILED one does not, so it stays retryable.
   async undoAll(): Promise<{ undone: number; failed: number; skipped: number }> {
     let undone = 0,
       failed = 0,
       skipped = 0;
     for (let i = this.entries.length - 1; i >= 0; i--) {
       const e = this.entries[i];
+      if (e.undone) continue; // double-undo guard: already reversed, do nothing
       if (!e.inverse) {
         skipped++;
         continue;
       }
       try {
         await e.inverse();
+        e.undone = true;
         undone++;
       } catch {
         failed++;

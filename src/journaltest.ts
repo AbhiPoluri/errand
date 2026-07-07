@@ -66,6 +66,48 @@ async function testSkipAndEmpty() {
   check("empty journal -> all zeros", empty.undone === 0 && empty.failed === 0 && empty.skipped === 0);
 }
 
+async function testDoubleUndoIsNoOp() {
+  console.log("\n== undone entries are excluded + a second undoAll is a true no-op (stale-undo guard) ==");
+  let deletes = 0;
+  const j = new Journal();
+  j.record({ op: "make_folder", description: "Made a folder", reversibility: "reversible", inverse: async () => void deletes++ });
+  j.record({ op: "move", description: "Moved a file", reversibility: "reversible", inverse: async () => void deletes++ });
+
+  check("both reversible before undo", j.reversibleCount() === 2);
+  const first = await j.undoAll();
+  check(`first undoAll reverses both ({undone:2}) (got ${JSON.stringify(first)})`, first.undone === 2 && first.failed === 0 && first.skipped === 0);
+  check("both inverses ran exactly once", deletes === 2, `${deletes}`);
+  check("entries marked undone -> reversibleCount is now 0", j.reversibleCount() === 0);
+  check("list() entries carry undone=true", j.list().every((e) => e.undone === true));
+
+  // The bug this guards: a SECOND undoAll (or a next completion re-listing the same cumulative
+  // journal) must NOT re-run any inverse — otherwise a re-created folder gets re-deleted.
+  const second = await j.undoAll();
+  check(`second undoAll is all-zeros (no-op) (got ${JSON.stringify(second)})`, second.undone === 0 && second.failed === 0 && second.skipped === 0);
+  check("no inverse ran again on the second undo", deletes === 2, `${deletes}`);
+}
+
+async function testFailedUndoStaysRetryable() {
+  console.log("\n== a FAILED inverse is not marked undone (stays retryable) ==");
+  let attempts = 0;
+  const j = new Journal();
+  j.record({
+    op: "move",
+    description: "flaky",
+    reversibility: "reversible",
+    inverse: async () => {
+      attempts++;
+      if (attempts === 1) throw new Error("boom"); // fail the first time, succeed the second
+    },
+  });
+  const first = await j.undoAll();
+  check(`first undoAll counts the failure ({failed:1}) (got ${JSON.stringify(first)})`, first.failed === 1 && first.undone === 0);
+  check("failed entry NOT marked undone -> still reversible", j.reversibleCount() === 1);
+  const second = await j.undoAll();
+  check(`retry succeeds ({undone:1}) (got ${JSON.stringify(second)})`, second.undone === 1 && second.failed === 0);
+  check("now marked undone -> reversibleCount 0", j.reversibleCount() === 0);
+}
+
 function testOnRecordHook() {
   console.log("\n== onRecord fires SYNCHRONOUSLY at record-time (manifest persisted before the fs window) ==");
   const j = new Journal();
@@ -116,6 +158,8 @@ async function main() {
   testLabelsKept();
   await testPartialFailureAndLifo();
   await testSkipAndEmpty();
+  await testDoubleUndoIsNoOp();
+  await testFailedUndoStaysRetryable();
   testOnRecordHook();
   console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILED"}`);
   process.exit(failures === 0 ? 0 : 1);
