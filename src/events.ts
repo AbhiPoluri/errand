@@ -28,6 +28,10 @@ export type AgentEventBody =
     | { type: "message.delta"; text: string }
     // --- v1 ---
     | { type: "message.completed"; text: string }
+    // The model declined the request. `delta.refusal` is a first-class SDK Delta field (and a
+    // `message.refusal` on the non-streamed message); emitting this resolves the Thinking pulse with
+    // the decline text instead of hanging forever or resolving as a "completed" empty reply.
+    | { type: "message.refusal"; text: string }
     | {
         type: "tool.proposed";
         callId: string;

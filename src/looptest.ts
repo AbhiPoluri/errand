@@ -405,8 +405,77 @@ async function testNoRetryOnPermanentError() {
   check("create called ONCE (a 4xx is not retried)", call === 1, `${call}`);
 }
 
+async function testUnexpectedThrowEmitsTerminal() {
+  console.log("\n== 12. an unexpected throw inside a turn -> ONE terminal run.error kind=internal, well-formed ==");
+  // A tool whose summarize() throws (summarize is NOT wrapped in the loop's per-run try/catch).
+  // The escaping exception must become a single terminal run.error, not a silent hang or a crash,
+  // and the tool_call must still be backfilled so the session doesn't 400 next turn.
+  const boom = stubTool("boom", { result: { ok: true } });
+  const registry = new Registry().register({
+    ...boom,
+    summarize: () => {
+      throw new Error("kaboom in summarize");
+    },
+  });
+  const { runner, session, tap } = makeRunner(registry, (i) =>
+    i === 0 ? toolCallResp("boom", { x: 1 }, crypto.randomUUID()) : textResp("unreachable"),
+  );
+  let threw = false;
+  try {
+    await runner.send("trigger an internal throw", new AbortController().signal);
+  } catch {
+    threw = true; // send() must NOT propagate — it converts the throw into a terminal event
+  }
+  check("send() swallowed the throw (did not propagate)", !threw);
+  const err = tap.events.find((e) => e.type === "run.error");
+  check("emitted run.error kind=internal", err?.type === "run.error" && err.kind === "internal");
+  const terminals = tap.events.filter((e) => e.type === "run.error" || e.type === "run.finished").length;
+  check("exactly ONE terminal event (no double-terminal)", terminals === 1, `${terminals}`);
+  const wf = wellFormed(session.messages as Msg[]);
+  check("messages well-formed (the tool_call was backfilled before the throw propagated)", wf.ok, wf.detail);
+}
+
+async function testNonStreamedRefusal() {
+  console.log("\n== 13. a non-streamed message.refusal resolves the run with the refusal text ==");
+  const registry = new Registry().register(stubTool("do_thing", { result: { ok: true } }));
+  const refusalResp = {
+    choices: [{ message: { role: "assistant", content: null, refusal: "I can't help with that." }, finish_reason: "stop" }],
+    usage: null,
+  };
+  const { runner, tap } = makeRunner(registry, () => refusalResp);
+  await runner.send("do something disallowed", new AbortController().signal);
+  check("emitted message.refusal", tap.events.some((e) => e.type === "message.refusal"));
+  const fin = tap.events.find((e) => e.type === "run.finished");
+  check("run.finished carries the refusal as finalMessage (not empty)", fin?.type === "run.finished" && fin.finalMessage === "I can't help with that.");
+  check("did NOT emit a (blank) message.completed", !tap.events.some((e) => e.type === "message.completed"));
+}
+
+async function testStreamedRefusal() {
+  console.log("\n== 14. a STREAMED delta.refusal is captured and resolves the run (was dropped before) ==");
+  const registry = new Registry().register(stubTool("do_thing", { result: { ok: true } }));
+  const runId = crypto.randomUUID();
+  const session = new Session(SYSTEM);
+  const tap = new Tap();
+  const stream = streamStub([
+    { choices: [{ delta: { refusal: "I won't " } }] },
+    { choices: [{ delta: { refusal: "do that." } }] },
+    { choices: [{ delta: {}, finish_reason: "stop" }] },
+  ]);
+  const client = { chat: { completions: { create: async () => stream } } } as unknown as OpenAI;
+  const runner = new AgentRunner({ session, sink: tap, registry, model: "stub", logger: new Logger(runId), runId, client, stream: true });
+  await runner.send("stream a refusal", new AbortController().signal);
+  const ref = tap.events.find((e) => e.type === "message.refusal");
+  check("emitted message.refusal with the reassembled text", ref?.type === "message.refusal" && ref.text === "I won't do that.");
+  const fin = tap.events.find((e) => e.type === "run.finished");
+  check("run.finished carries the streamed refusal", fin?.type === "run.finished" && fin.finalMessage === "I won't do that.");
+  check("did NOT hang or report an empty completion", !tap.events.some((e) => e.type === "message.completed"));
+}
+
 async function main() {
   await testFailingActionAborts();
+  await testUnexpectedThrowEmitsTerminal();
+  await testNonStreamedRefusal();
+  await testStreamedRefusal();
   await testStreamIdleWatchdog();
   await testRetryBeforeOutput();
   await testNoRetryAfterOutput();

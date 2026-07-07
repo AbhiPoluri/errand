@@ -147,7 +147,32 @@ export class AgentRunner {
   }
 
   // One user message -> runs to completion (final answer, error, or cancellation).
+  // Thin guard around the turn body: ANY exception that escapes it (a throwing tool.summarize /
+  // tool.describe, gate.autoApproves, a rejecting sink) is turned into a TERMINAL run.error so the
+  // SSE stream closes and the Run View settles — never a silent hang. The per-turn `finally` inside
+  // sendTurn still runs first and backfills tool results (the 400-safety), because it lives on the
+  // inner stack and unwinds before the exception reaches this catch. All the expected exits already
+  // emit their own terminal event and `return`, so they never reach here — no double terminal event.
   async send(userInput: string, signal: AbortSignal): Promise<string> {
+    try {
+      return await this.sendTurn(userInput, signal);
+    } catch (err: any) {
+      this.o.logger.log("loop_error", String(err?.stack ?? err));
+      try {
+        await this.emit({
+          type: "run.error",
+          kind: "internal",
+          userMessage: "Something went wrong on my end — nothing was left half-done that I can't explain.",
+          recoverable: false,
+        });
+      } catch {
+        /* the sink itself is failing — nothing more we can do; the route still tears down the stream */
+      }
+      return "";
+    }
+  }
+
+  private async sendTurn(userInput: string, signal: AbortSignal): Promise<string> {
     this.turnId = crypto.randomUUID();
     if (!this.started) {
       this.started = true;
@@ -167,6 +192,7 @@ export class AgentRunner {
       // the tool-execution logic below is identical. Reasoning is logged but NEVER streamed raw.
       let content = "";
       let reasoning = "";
+      let refusal = "";
       let finishReason: string | null = null;
       let usage: unknown = null;
       const toolAcc: { id: string; type: "function"; function: { name: string; arguments: string } }[] = [];
@@ -232,6 +258,7 @@ export class AgentRunner {
             }
             const r = delta?.reasoning ?? delta?.reasoning_content;
             if (typeof r === "string" && r) reasoning += r;
+            if (typeof delta?.refusal === "string" && delta.refusal) refusal += delta.refusal;
             if (Array.isArray(delta?.tool_calls)) {
               for (const tc of delta.tool_calls) {
                 const idx = typeof tc.index === "number" ? tc.index : toolAcc.length;
@@ -247,6 +274,7 @@ export class AgentRunner {
           const m: any = res.choices?.[0]?.message ?? {};
           content = typeof m.content === "string" ? m.content : "";
           reasoning = typeof m.reasoning === "string" ? m.reasoning : typeof m.reasoning_content === "string" ? m.reasoning_content : "";
+          refusal = typeof m.refusal === "string" ? m.refusal : "";
           finishReason = res.choices?.[0]?.finish_reason ?? null;
           usage = res.usage ?? null;
           for (const tc of Array.isArray(m.tool_calls) ? m.tool_calls : []) {
@@ -292,6 +320,7 @@ export class AgentRunner {
             return "";
           }
           reasoning = "";
+          refusal = "";
           finishReason = null;
           usage = null;
           continue; // try the request again
@@ -309,7 +338,7 @@ export class AgentRunner {
       const toolCalls = toolAcc.filter(Boolean);
       const msg = {
         role: "assistant" as const,
-        content: content || null,
+        content: content || refusal || null,
         ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
       };
       this.o.session.pushAssistant(msg as unknown as OpenAI.Chat.Completions.ChatCompletionMessageParam);
@@ -348,16 +377,42 @@ export class AgentRunner {
         return content;
       }
 
+      // The model declined (streamed delta.refusal, or a non-streamed message.refusal). Emit the
+      // refusal so the Run View resolves the Thinking pulse with the decline text, then finish the
+      // run with that text as the final message — NOT a "completed" empty finalMessage that would
+      // render as a blank reply. Backfill any tool_calls the (rare) refusal rode alongside first.
+      if (refusal.trim()) {
+        backfillStrandedCalls();
+        await this.emit({ type: "message.refusal", text: refusal });
+        const changes = this.o.session.journal
+          .list()
+          .filter((e) => !e.undone)
+          .map((e) => ({
+            summary: e.description,
+            reversibility: e.reversibility,
+            undoable: typeof e.inverse === "function",
+            journaledOpId: e.id,
+          }));
+        await this.emit({ type: "run.finished", status: "completed", finalMessage: refusal, changes });
+        return refusal;
+      }
+
       if (toolCalls.length === 0) {
         const text = content;
         if (text) await this.emit({ type: "message.completed", text });
-        // Tell the UI what actually changed (drives the Summary recap + Undo-all).
-        const changes = this.o.session.journal.list().map((e) => ({
-          summary: e.description,
-          reversibility: e.reversibility,
-          undoable: typeof e.inverse === "function",
-          journaledOpId: e.id,
-        }));
+        // Tell the UI what actually changed (drives the Summary recap + Undo-all). EXCLUDE entries
+        // already undone in an earlier completion of this same run — the journal is cumulative, so
+        // without this filter an "Undo all N" from turn 1 would reappear next turn and re-run its
+        // inverses (e.g. re-deleting a folder the user re-created after undoing).
+        const changes = this.o.session.journal
+          .list()
+          .filter((e) => !e.undone)
+          .map((e) => ({
+            summary: e.description,
+            reversibility: e.reversibility,
+            undoable: typeof e.inverse === "function",
+            journaledOpId: e.id,
+          }));
         await this.emit({ type: "run.finished", status: "completed", finalMessage: text, changes });
         return text;
       }

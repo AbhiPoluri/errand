@@ -45,6 +45,9 @@ class CliSink implements EventSink {
       case "message.completed":
         out("\n" + e.text + "\n");
         break;
+      case "message.refusal":
+        out("\n" + e.text + "\n");
+        break;
       case "tool.proposed":
         out(dim(`  -> ${e.action}`) + "\n");
         break;
