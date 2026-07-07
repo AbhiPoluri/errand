@@ -52,8 +52,16 @@ export class Journal {
   // commit — unchanged by this hook and identical to the old tool.result path.) Never breaks record().
   onRecord?: (entry: JournalEntry) => void;
 
+  // Optional hook fired SYNCHRONOUSLY the instant undoAll() successfully reverses an entry (right
+  // after `undone` is set true). The host wires this to PERSIST the undone flag, so whole-run undo
+  // state survives eviction/restart. Without it, an evicted-then-rehydrated run rebuilds every entry
+  // with undone=false, so a second whole-run undo would re-run inverses already applied (the
+  // stale-undo re-delete risk — e.g. re-deleting a folder the user re-created). Never breaks undoAll.
+  onUndone?: (entry: JournalEntry) => void;
+
   // `id` is normally generated; rebuildJournalFromStore passes the persisted opId so the same
   // entry re-persists idempotently (INSERT OR IGNORE) instead of duplicating on the next turn.
+  // `undone` is likewise restored from the store so a rehydrated run doesn't re-undo settled ops.
   record(entry: Omit<JournalEntry, "id" | "ts"> & { id?: string }): string {
     const id = entry.id ?? crypto.randomUUID();
     // If something claims 'reversible' but recorded no inverse, demote it — never lie.
@@ -101,6 +109,13 @@ export class Journal {
         await e.inverse();
         e.undone = true;
         undone++;
+        if (this.onUndone) {
+          try {
+            this.onUndone(e);
+          } catch {
+            /* persisting the undone flag must never break undoAll() */
+          }
+        }
       } catch {
         failed++;
       }

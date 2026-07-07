@@ -49,7 +49,7 @@ async function main(): Promise<void> {
   {
     const insp = new DatabaseSync(oldDb);
     check("migration v1 added the embedding column to the old table", hasColumn(insp, "memories", "embedding"));
-    check("user_version bumped to the latest (2)", userVersion(insp) === 2);
+    check("user_version bumped to the latest (3)", userVersion(insp) === 3);
     // The pre-existing row survived the ALTER (migration is non-destructive).
     const row = insp.prepare("SELECT text, embedding FROM memories WHERE id = 'm1'").get() as any;
     check("existing memory row survived the migration", row?.text === "keep me");
@@ -58,6 +58,8 @@ async function main(): Promise<void> {
     check("migration v2 created turn_state", hasTable(insp, "turn_state"));
     check("migration v2 created tool_inflight", hasTable(insp, "tool_inflight"));
     check("migration v2 added runs.resumable", hasColumn(insp, "runs", "resumable"));
+    // v3 — the persisted journal `undone` flag (whole-run-undo state survives eviction/restart).
+    check("migration v3 added journal.undone", hasColumn(insp, "journal", "undone"));
     insp.close();
   }
   check("listMemories works post-migration", store.listMemories().length === 1);

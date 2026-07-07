@@ -77,6 +77,9 @@ export function rebuildJournalFromStore(runId: string, journal: Journal): number
       reversibility: op.reversibility as any,
       manifest: op.manifest ?? undefined,
       inverse: reconstructInverse(op),
+      // Restore the persisted whole-run-undo state so a rehydrated run doesn't re-run an inverse it
+      // already applied (reversibleCount excludes it; undoAll skips it) — the stale-undo re-delete guard.
+      undone: op.undone,
     });
   }
   return ops.length;

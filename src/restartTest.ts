@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { rmSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 // These don't touch the DB, so they're safe to import statically (before ERRAND_DB is set).
 import { Journal } from "./journal.ts";
-import { writeFile, moveFile, deleteFile, renameFile } from "./tools/files.ts";
+import { writeFile, moveFile, deleteFile, renameFile, makeFolder } from "./tools/files.ts";
 import type { ToolContext } from "./tools/index.ts";
 
 const dbPath = join(tmpdir(), `errand-restarttest-${process.pid}.db`);
@@ -51,24 +51,31 @@ async function main(): Promise<void> {
   store.createRun("done", "Done run", 1, ["/tmp"]);
   store.setStatus("done", "done");
 
-  // Mid-turn checkpoints: a zombie (midtask) and the live run both have one. Reconcile must DROP the
-  // zombie's (so it can't be resumed from a stale turn_state) and LEAVE the live run's alone.
+  // RESUMABLE: a working run with a durable mid-turn checkpoint. Reconcile must LEAVE it alone (it is
+  // re-entered by rehydrate() on next access, which re-parks any pending approval + continues the loop).
+  // Only CHECKPOINT-LESS working runs (parked, midtask) are true dead-ends that get force-stopped here.
+  store.createRun("resumable", "Resumable mid-turn", 1, ["/tmp"]);
+  store.appendEvent("resumable", ev("resumable", 0, { type: "run.started", title: "Resumable mid-turn" }));
   const cp = () => ({
     turnId: "t", phase: "executing_tools", iteration: 0, callCursor: 0, pendingCallId: null,
     messages: [], callCounts: {}, autoApproveReversible: false, maxEmittedSeq: 0,
   });
-  store.saveTurnState("midtask", cp());
+  store.saveTurnState("resumable", cp());
   store.saveTurnState("live", cp());
+  check("isResumable: a working run WITH a checkpoint is resumable", store.isResumable("resumable") === true);
+  check("isResumable: a working run WITHOUT a checkpoint is NOT", store.isResumable("parked") === false);
 
   const n = store.reconcileOrphans(new Set(["live"]));
-  check(`reconciled exactly 2 orphans (parked + midtask), live skipped (got ${n})`, n === 2);
+  check(`reconciled exactly 2 checkpoint-less orphans (parked + midtask); live + resumable skipped (got ${n})`, n === 2);
 
   const status = (id: string) => store.listRunSummaries().find((r) => r.runId === id)?.status;
   check("parked → stopped", status("parked") === "stopped");
   check("midtask → stopped", status("midtask") === "stopped");
   check("live untouched (still working)", status("live") === "working");
   check("done untouched (still done)", status("done") === "done");
-  check("reconcile DROPPED the zombie's turn_state", store.getTurnState("midtask") === null);
+  check("resumable run left WORKING (reconcile skips a checkpointed run)", status("resumable") === "working");
+  check("resumable run's checkpoint kept (available for resume-on-access)", store.getTurnState("resumable") !== null);
+  check("isResumable: a stopped run is no longer resumable", store.isResumable("midtask") === false);
   check("reconcile LEFT the live run's turn_state", store.getTurnState("live") !== null);
 
   // Parked run: its approval was resolved to cancelled, then a terminal interrupted event added.
@@ -209,9 +216,49 @@ async function main(): Promise<void> {
   check("undoRun did NOT return null for an out-of-memory run", res !== null);
   check("undoRun restored the file via the rebuilt journal", existsSync(target2) && readFileSync(target2, "utf8") === "KEEP ME");
   check(`undoRun reported undone>=1, failed=0 (got ${JSON.stringify(res)})`, !!res && res.undone >= 1 && res.failed === 0);
+  // Whole-run undo is idempotent ACROSS a restart: the first undoRun persisted `undone`, so a SECOND
+  // undoRun (rebuilding a fresh throwaway journal from the store) is a true no-op — it can't re-run an
+  // inverse and, e.g., re-delete a file the user has since re-created.
+  const res2 = await reg.undoRun("oom-run");
+  check(`second undoRun is a no-op — persisted undone respected (got ${JSON.stringify(res2)})`, !!res2 && res2.undone === 0 && res2.failed === 0);
+  check("second undoRun left the restored file intact", existsSync(target2) && readFileSync(target2, "utf8") === "KEEP ME");
 
-  rmSync(ws, { recursive: true, force: true });
-  rmSync(ws2, { recursive: true, force: true });
+  // ---- persisted `undone` flag: a whole-run undo's state survives eviction/restart ----
+  // Without persistence, a rehydrated run rebuilds every op with undone=false, so a SECOND whole-run
+  // undo re-runs the inverse (the stale-undo re-delete risk). markJournalOpUndone + the restore in
+  // rebuildJournalFromStore close that.
+  console.log("\n-- persisted undone flag (whole-run-undo survives restart) --");
+  const ws3 = mkdtempSync(join(tmpdir(), "errand-undone-"));
+  store.createRun("undone-run", "undone persistence", 1, [ws3]);
+  const folder = join(ws3, "made-folder");
+  const jU = new Journal();
+  // Persist undone the instant undoAll reverses each op (as the live/throwaway host wires it).
+  jU.onUndone = (e) => store.markJournalOpUndone("undone-run", e.id);
+  await makeFolder.run(
+    { path: folder },
+    { signal: new AbortController().signal, journal: jU, runId: "undone-run", workspaceRoot: ws3, roots: [ws3] },
+  );
+  for (const e of jU.list())
+    store.appendJournalOp("undone-run", { opId: e.id, op: e.op, description: e.description, reversibility: e.reversibility, manifest: e.manifest });
+  check("undone-run: folder created", existsSync(folder));
+  const u1 = await jU.undoAll();
+  check(`first undo removed the folder (undone=1) (got ${JSON.stringify(u1)})`, u1.undone === 1 && !existsSync(folder));
+  check("store persisted undone=1 for the op", store.getJournalOps("undone-run").every((o) => o.undone === true));
+
+  // The user RE-CREATES the folder and puts data in it — the classic stale-undo re-delete target.
+  mkdirSync(folder);
+  const precious = join(folder, "precious.txt");
+  writeFileSync(precious, "USER DATA");
+  // "Restart": rebuild a fresh journal purely from the store; the restored undone flag must exclude it.
+  const jU2 = new Journal();
+  jU2.onUndone = (e) => store.markJournalOpUndone("undone-run", e.id);
+  rebuildJournalFromStore("undone-run", jU2);
+  check("rehydrated journal restored undone=true -> reversibleCount 0", jU2.reversibleCount() === 0);
+  const u2 = await jU2.undoAll();
+  check(`second whole-run undo is a no-op (got ${JSON.stringify(u2)})`, u2.undone === 0 && u2.failed === 0);
+  check("the user's re-created folder + data were NOT re-deleted", existsSync(folder) && readFileSync(precious, "utf8") === "USER DATA");
+
+  rmSync(ws3, { recursive: true, force: true });
 
   console.log(`\nRESULT: ${failures === 0 ? "ALL PASS" : failures + " FAILED"}`);
   if (failures) process.exitCode = 1;

@@ -153,6 +153,44 @@ function testOnRecordHook() {
   check("record() works with no onRecord set", j4.list().length === 1);
 }
 
+async function testOnUndoneHook() {
+  console.log("\n== onUndone fires once per successfully-reversed entry (persists whole-run-undo state) ==");
+  const undoneIds: string[] = [];
+  const j = new Journal();
+  j.onUndone = (e) => undoneIds.push(e.id);
+  const a = j.record({ op: "a", description: "first", reversibility: "reversible", inverse: async () => {} });
+  const b = j.record({ op: "b", description: "second", reversibility: "reversible", inverse: async () => {} });
+  await j.undoAll();
+  check("onUndone fired for BOTH reversed entries", undoneIds.length === 2 && undoneIds.includes(a) && undoneIds.includes(b));
+
+  // A SECOND undoAll must NOT re-fire onUndone (entries already undone → skipped).
+  await j.undoAll();
+  check("onUndone did NOT fire again on a second undoAll", undoneIds.length === 2);
+
+  // A FAILED inverse must NOT fire onUndone (only a successful reversal persists undone).
+  const seen: string[] = [];
+  const j2 = new Journal();
+  j2.onUndone = (e) => seen.push(e.id);
+  j2.record({ op: "boom", description: "throws", reversibility: "reversible", inverse: async () => { throw new Error("x"); } });
+  await j2.undoAll();
+  check("onUndone did NOT fire for a failed inverse (stays retryable)", seen.length === 0);
+
+  // A restored entry that arrives already-undone (record({undone:true})) is excluded + never re-run.
+  let ran = 0;
+  const j3 = new Journal();
+  j3.record({ op: "restored", description: "already undone", reversibility: "reversible", inverse: async () => void ran++, undone: true });
+  check("record({undone:true}) is excluded from reversibleCount", j3.reversibleCount() === 0);
+  const r = await j3.undoAll();
+  check("an already-undone restored entry is skipped, inverse never runs", ran === 0 && r.undone === 0 && r.skipped === 0);
+
+  // A throwing onUndone must NOT break undoAll (persistence failure can't corrupt the reversal).
+  const j5 = new Journal();
+  j5.onUndone = () => { throw new Error("disk full"); };
+  j5.record({ op: "m", description: "m", reversibility: "reversible", inverse: async () => {} });
+  const r5 = await j5.undoAll();
+  check("a throwing onUndone does not break undoAll", r5.undone === 1 && r5.failed === 0);
+}
+
 async function main() {
   testDemotion();
   testLabelsKept();
@@ -161,6 +199,7 @@ async function main() {
   await testDoubleUndoIsNoOp();
   await testFailedUndoStaysRetryable();
   testOnRecordHook();
+  await testOnUndoneHook();
   console.log(`\n${failures === 0 ? "ALL PASS" : failures + " FAILED"}`);
   process.exit(failures === 0 ? 0 : 1);
 }

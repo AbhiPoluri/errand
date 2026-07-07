@@ -156,6 +156,18 @@ const MIGRATIONS: Array<{ name: string; up: () => void }> = [
       }
     },
   },
+  {
+    // v3 — persist the journal `undone` flag. It was in-memory only, so an evicted-then-rehydrated
+    // run rebuilt every op with undone=false: a second whole-run undo would re-run inverses already
+    // applied (re-deleting a folder the user re-created, etc.). Now markJournalOpUndone() persists it
+    // and rebuildJournalFromStore() restores it. Additive + idempotent (no-op if the column exists).
+    name: "journal.undone",
+    up: () => {
+      if (!columnExists("journal", "undone")) {
+        db.exec("ALTER TABLE journal ADD COLUMN undone INTEGER NOT NULL DEFAULT 0");
+      }
+    },
+  },
 ];
 
 function userVersion(): number {
@@ -201,8 +213,9 @@ const stmtAddJournal = db.prepare(
   `INSERT OR IGNORE INTO journal (runId, opId, op, description, reversibility, manifest) VALUES (?, ?, ?, ?, ?, ?)`,
 );
 const stmtJournal = db.prepare(
-  `SELECT opId, op, description, reversibility, manifest FROM journal WHERE runId = ? ORDER BY rowid ASC`,
+  `SELECT opId, op, description, reversibility, manifest, undone FROM journal WHERE runId = ? ORDER BY rowid ASC`,
 );
+const stmtMarkUndone = db.prepare(`UPDATE journal SET undone = 1 WHERE runId = ? AND opId = ?`);
 const stmtSaveTurn = db.prepare(
   `INSERT OR REPLACE INTO turn_state
      (runId, turnId, phase, iteration, callCursor, pendingCallId, messages, callCounts, autoApproveReversible, maxEmittedSeq, updatedAt)
@@ -210,6 +223,12 @@ const stmtSaveTurn = db.prepare(
 );
 const stmtGetTurn = db.prepare(`SELECT * FROM turn_state WHERE runId = ?`);
 const stmtClearTurn = db.prepare(`DELETE FROM turn_state WHERE runId = ?`);
+const stmtSaveInflight = db.prepare(
+  `INSERT OR REPLACE INTO tool_inflight (runId, callId, toolName, reversibility, startedAt) VALUES (?, ?, ?, ?, ?)`,
+);
+const stmtGetInflight = db.prepare(`SELECT callId FROM tool_inflight WHERE runId = ?`);
+const stmtClearInflightCall = db.prepare(`DELETE FROM tool_inflight WHERE runId = ? AND callId = ?`);
+const stmtClearInflightRun = db.prepare(`DELETE FROM tool_inflight WHERE runId = ?`);
 
 export function createRun(runId: string, title: string, createdAt: number, roots: string[]): void {
   stmtCreate.run(runId, title, createdAt, JSON.stringify(roots), Date.now());
@@ -269,6 +288,7 @@ export interface JournalOp {
   description: string;
   reversibility: string;
   manifest: OpManifest | null; // parsed back from JSON; null if absent/corrupt
+  undone: boolean; // persisted whole-run-undo state — a rehydrated run must not re-run this inverse
 }
 
 export function appendJournalOp(
@@ -292,7 +312,15 @@ export function getJournalOps(runId: string): JournalOp[] {
     description: r.description,
     reversibility: r.reversibility,
     manifest: safeParse<OpManifest | null>(r.manifest, null),
+    undone: !!r.undone,
   }));
+}
+
+// Persist that a whole-run undo successfully reversed this op, so a rehydrated run's rebuilt journal
+// won't re-run its inverse (the stale-undo re-delete guard). Idempotent — setting undone=1 twice is a
+// no-op. Keyed by (runId, opId) like appendJournalOp.
+export function markJournalOpUndone(runId: string, opId: string): void {
+  stmtMarkUndone.run(runId, opId);
 }
 
 // Permanently remove a run and its full event stream (user clears it from Recently). All the
@@ -302,6 +330,7 @@ export function deleteRun(runId: string): void {
     db.prepare("DELETE FROM events WHERE runId = ?").run(runId);
     db.prepare("DELETE FROM journal WHERE runId = ?").run(runId);
     db.prepare("DELETE FROM turn_state WHERE runId = ?").run(runId);
+    db.prepare("DELETE FROM tool_inflight WHERE runId = ?").run(runId);
     db.prepare("DELETE FROM runs WHERE runId = ?").run(runId);
   });
 }
@@ -372,6 +401,34 @@ export function clearTurnState(runId: string): void {
   stmtClearTurn.run(runId);
 }
 
+// ---- tool_inflight (the irreversible-double-execution guard) ----
+// A permanent/unknown tool marks itself IN-FLIGHT the instant before it runs and clears the marker the
+// instant after. If the process is killed in that window, the marker survives: on resume the loop sees
+// the call was already executing and marks it UNCERTAIN instead of re-running it — so a crash can never
+// double-send an email / re-charge a card. Reversible tools are NOT marked (re-running them is safe).
+export function saveInflight(runId: string, callId: string, toolName: string, reversibility: string): void {
+  stmtSaveInflight.run(runId, callId, toolName, reversibility, Date.now());
+}
+export function getInflightIds(runId: string): Set<string> {
+  return new Set((stmtGetInflight.all(runId) as any[]).map((r) => r.callId as string));
+}
+export function clearInflight(runId: string, callId: string): void {
+  stmtClearInflightCall.run(runId, callId);
+}
+export function clearInflightForRun(runId: string): void {
+  stmtClearInflightRun.run(runId);
+}
+
+// A run is RESUMABLE if it's still 'working' AND has a durable mid-turn checkpoint. Such a run is a
+// zombie in memory (its loop died with the process) but is NOT a legacy dead-end: rehydrate() can
+// re-enter its loop from the checkpoint. reconcileOrphans leaves these alone (so the checkpoint
+// survives for lazy resume-on-access); it only force-stops working runs that have NO checkpoint.
+export function isResumable(runId: string): boolean {
+  const r = db.prepare("SELECT status FROM runs WHERE runId = ?").get(runId) as any;
+  if (!r || r.status !== "working") return false;
+  return getTurnState(runId) !== null;
+}
+
 // ---- restart reconciliation ----
 // Any run still 'working' in the DB after a process restart is a zombie: its in-memory loop
 // was killed, so it will never finish on its own and would hang the UI (a stuck "working"
@@ -382,9 +439,13 @@ export function clearTurnState(runId: string): void {
 // up with a new message. Called ONCE per process at boot; `liveIds` (runs currently
 // executing in memory — empty at a true boot) are never touched.
 export function reconcileOrphans(liveIds: Set<string> = new Set()): number {
+  // Leave RESUMABLE runs (a working run with a durable checkpoint) untouched: they are re-entered by
+  // rehydrate() on next access (a reconnecting SSE stream, a /message, a /decision), which re-parks any
+  // pending approval and continues the loop. Only a working run with NO checkpoint is a true dead-end
+  // that must be force-stopped here (its parked approval buttons are dead and it can't be resumed).
   const orphans = (db.prepare("SELECT runId FROM runs WHERE status = 'working'").all() as any[])
     .map((r) => r.runId as string)
-    .filter((id) => !liveIds.has(id));
+    .filter((id) => !liveIds.has(id) && !isResumable(id));
   for (const runId of orphans) {
     const events = getEvents(runId);
     const turnId = "interrupted";
