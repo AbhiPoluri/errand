@@ -27,6 +27,19 @@ check("empty-label button is risky", classifyClickRisk("", "button") === true);
 check("unlabeled clickable div is risky", classifyClickRisk(undefined, "div") === true);
 check("unlabeled input(submit) is risky", classifyClickRisk(undefined, "submit") === true);
 
+console.log("\n== fail-closed: ambiguous/unknown LABELLED buttons now pause (the core inversion) ==");
+// These used to classify BENIGN (no consequential verb matched) and auto-fire ungated on the user's
+// real Chrome. A "Save"/"Apply"/"OK"/"Update" is often a commit; a non-English or icon-only label is
+// unknowable. All must pause now.
+for (const l of ["Save", "Apply", "OK", "Update", "Done", "Confirm changes", "Enviar", "确定", "はい", "Aceptar", "Weiter"]) {
+  check(`"${l}" is risky (unknown intent → pause)`, classifyClickRisk(l, "button") === true);
+}
+check("labelled clickable div with an unknown label is risky", classifyClickRisk("Save", "div") === true);
+check("labelled span with an unknown label is risky", classifyClickRisk("Apply", "span") === true);
+check("role=button treated like button (unknown label → risky)", classifyClickRisk("OK", "button") === true);
+// A RISKY verb rendered as a link still pauses (verb list is an ADDITIONAL signal, not the only path).
+check('"Delete" as a link still pauses', classifyClickRisk("Delete", "a") === true);
+
 console.log("\n== benign navigation stays clickable ==");
 for (const l of ["Home", "Show more", "Open menu", "Next page", "Back"]) {
   check(`"${l}" is benign`, classifyClickRisk(l, "a") === false);

@@ -1,9 +1,13 @@
-// Memory tool — lets the agent save a durable fact about the user during a task. Benign
-// (it's Errand's own note, not the user's files), so ungated. The user sees and controls
-// everything via the Memory panel; dreaming later extracts the subtler patterns.
+// Memory tool — lets the agent save a durable fact about the user during a task. A memory is a
+// DURABLE write to persistent state that carries forward into every future task, so — like any
+// mutation — it is gated (pauses for the user's okay) and journaled with a real inverse (delete the
+// stored memory). This closes a poisoning vector: untrusted page/document text can no longer silently
+// plant a durable fact; the user sees "Remembering that …" and approves, and can undo it afterward.
+// The user still sees and controls everything via the Memory panel; dreaming extracts subtler
+// patterns separately (that path is the user's own review, not untrusted text).
 import { z } from "zod";
 import type { Tool } from "./index.ts";
-import { addMemory } from "../server/store.ts";
+import { addMemory, deleteMemory } from "../server/store.ts";
 
 const Args = z.object({
   text: z.string().min(3),
@@ -25,11 +29,28 @@ export const remember: Tool<Args> = {
     },
   },
   argsSchema: Args,
-  gated: false,
-  describe: (a) => ({ action: `Remembering that ${a.text.slice(0, 70)}`, reversibility: "reversible" }),
+  gated: true,
+  describe: (a) => ({
+    action: `Remember that ${a.text.slice(0, 70)}`,
+    consequences: "I'll keep this in mind for future tasks. You can undo it here or in your saved notes.",
+    reversibility: "reversible",
+  }),
   summarize: () => "Noted that for next time.",
   run: async (a, ctx) => {
-    await addMemory(a.text, a.kind ?? "fact", ctx.runId);
+    const id = await addMemory(a.text, a.kind ?? "fact", ctx.runId);
+    // Journal a real inverse (delete the stored memory) so the reversible label is honest and the
+    // fact shows up in "What changed" with a working Undo. addMemory returns "" only for empty text
+    // (Zod already forbids that) — guard anyway. deleteMemory is idempotent (a no-op if already gone).
+    if (id) {
+      ctx.journal.record({
+        op: "remember",
+        description: `Remembered: ${a.text.slice(0, 70)}`,
+        reversibility: "reversible",
+        inverse: async () => {
+          deleteMemory(id);
+        },
+      });
+    }
     return { ok: true };
   },
 };

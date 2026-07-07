@@ -11,12 +11,30 @@ export const RISKY =
 // Element kinds that are inherently navigation/disclosure — safe to click even without a label.
 const BENIGN_KINDS = new Set(["a", "summary", "details"]);
 
+// Labels that clearly read as navigation / disclosure / paging — safe even on a button or div.
+// Kept deliberately NARROW: movement through content, expand/collapse, menus, paging. NOT a commit
+// (no "OK", "Save", "Apply", "Confirm" — those must pause). Anchored (^…$) so a benign word inside a
+// consequential phrase can't whitelist it. English-only on purpose: a label we can't read as clearly
+// benign is treated as unknown, which fails closed to RISKY below.
+const BENIGN_LABEL =
+  /^(home|back|go back|next|next page|previous|prev|previous page|newer|older|show more|show less|see more|see all|view more|view all|load more|read more|expand|collapse|open menu|close menu|toggle menu|first|last|top|page \d+|more|»|«|›|‹|→|←)$/i;
+
 // `label` is the element's visible text/aria-label; `kind` is its tag ("a", "button", an input
-// type, "div", …). A LABELLED element is risky iff its label matches a consequential verb. An
-// UNLABELLED element (an icon-only button, a clickable div — common in modern UIs) has unknown
-// intent, so it defaults to RISKY (pause) unless it's a bare navigation/disclosure kind.
+// type, "div", …). FAIL-CLOSED: a labelled clickable element is treated as RISKY (pause for the
+// user's okay) UNLESS it is a bare navigation/disclosure kind (a/summary/details) OR its label
+// clearly matches a benign navigation pattern. An UNLABELLED non-navigation element (an icon-only
+// button, a clickable div — common in modern UIs) has unknown intent, so it is RISKY. This means
+// unknown/ambiguous buttons ("Save", "Apply", "OK", non-English, icon-only) pause rather than
+// auto-fire on the user's real, logged-in browser. The RISKY verb list is an ADDITIONAL signal
+// (it makes a link labelled "Delete" pause too) but is never the ONLY path to risky.
 export function classifyClickRisk(label: string | undefined, kind?: string): boolean {
   const l = label?.trim();
-  if (l) return RISKY.test(l);
-  return !(kind && BENIGN_KINDS.has(kind.toLowerCase()));
+  // A consequential verb ("Delete", "Send", "Pay", "Transfer"…) is risky on ANY element, even a link.
+  if (l && RISKY.test(l)) return true;
+  // Bare navigation/disclosure kinds are otherwise benign (links, <summary>, <details>).
+  if (kind && BENIGN_KINDS.has(kind.toLowerCase())) return false;
+  // A non-navigation clickable with NO readable label has unknown intent → pause.
+  if (!l) return true;
+  // Labelled non-navigation element: benign ONLY if it clearly reads as navigation/disclosure.
+  return !BENIGN_LABEL.test(l);
 }
