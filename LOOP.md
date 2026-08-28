@@ -1,5 +1,10 @@
 # Errand — Autonomous Loop Queue
 
+> **STOP — the loop is CLOSED (2026-08-28).** The project is wrapped: `durability-electron` merged
+> to `main` and pushed, resume engine done (2026-07-07), 30 offline suites green, no live heartbeat.
+> The two remaining Backlog coverage tasks below are **won't-do** (Discovery reached exhaustion —
+> both were marked marginal when queued). This file stays as history. Do not run iterations.
+
 This is the working queue + rulebook for the self-driving dev loop (run via `/loop`). It is the
 loop's MEMORY: each iteration reads it to decide what to do next, and updates it when done. Full
 history/detail lives in `PLAN.md` §11 and `HANDOFF.md`; this file is just the actionable queue.
