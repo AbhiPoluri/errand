@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="extension/icons/icon-128.png" width="96" alt="Errand logo">
+</p>
+
 # Errand
 
 A calm AI agent for people who have never heard of agents.
